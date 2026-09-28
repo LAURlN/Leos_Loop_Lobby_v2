@@ -16,6 +16,7 @@ Status as of the first v2 milestone. Items carried over from v1's
   ("X is recording on track 2", v1), late join with audio transfer
 - Listen-only mode without microphone; `?testmic` synthetic input
 - One responsive UI for phone and desktop; keyboard shortcuts on desktop
+- Song sections: tab bar with reordering, renaming, peer presence and isolated loop copying
 - GitHub Pages deployment workflow
 
 ## Next
