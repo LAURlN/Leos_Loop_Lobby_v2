@@ -253,19 +253,11 @@ export interface NewLayer {
 export function addLayer(doc: Y.Doc, layer: NewLayer): boolean {
   let ok = false;
   doc.transact(() => {
-    const { meta, tracks, layers, sections } = roots(doc);
+    const { tracks, layers } = roots(doc);
     const track = tracks.get(layer.trackId);
     if (!track) return;
     const length = clampLength(layer.length48);
-    if (typeof track.get('length48') !== 'number') track.set('length48', length);
-    const sectionId = track.get('sectionId') as string | undefined;
-    if (sectionId) {
-      const section = sections.get(sectionId);
-      if (section && typeof section.get('referenceLength48') !== 'number') {
-        section.set('referenceLength48', length);
-      }
-    }
-    if (typeof meta.get('referenceLength48') !== 'number') meta.set('referenceLength48', length);
+    claimLength(doc, track, length);
     let seq = 0;
     for (const [id, l] of layers.entries()) {
       const s = readLayer(id, l);
@@ -280,10 +272,33 @@ export function addLayer(doc: Y.Doc, layer: NewLayer): boolean {
     y.set('frames', Math.round(layer.frames));
     y.set('gain', 1);
     y.set('hidden', false);
+    // The loop length this take was recorded against, so redo can restore it.
+    y.set('length48', length);
     layers.set(layer.id, y);
     ok = true;
   }, LOCAL);
   return ok;
+}
+
+/** Gives a track without length (and its section / the session, if unset) a loop length. */
+function claimLength(doc: Y.Doc, track: YTrack, length: number): void {
+  const { meta, sections } = roots(doc);
+  if (typeof track.get('length48') !== 'number') track.set('length48', length);
+  const sectionId = track.get('sectionId') as string | undefined;
+  const section = sectionId ? sections.get(sectionId) : undefined;
+  if (section && typeof section.get('referenceLength48') !== 'number') section.set('referenceLength48', length);
+  if (typeof meta.get('referenceLength48') !== 'number') meta.set('referenceLength48', length);
+}
+
+/** A free track whose takes are all gone or undone forgets its length, so the next take decides again. */
+function releaseLengthIfEmpty(doc: Y.Doc, trackId: string): void {
+  const { tracks, layers } = roots(doc);
+  const track = tracks.get(trackId);
+  const spec = track?.get('lengthSpec') as LengthSpec | undefined;
+  if (!track || (spec && spec.kind !== 'free')) return;
+  for (const l of layers.values()) if (l.get('trackId') === trackId && l.get('hidden') !== true) return;
+  track.set('length48', null);
+  resetReferenceIfUnused(doc, track.get('sectionId') as string | undefined);
 }
 
 function ownLayers(doc: Y.Doc, trackId: string, author: string) {
@@ -298,7 +313,10 @@ export function undoLayer(doc: Y.Doc, trackId: string, author: string): string |
   const visible = ownLayers(doc, trackId, author).filter(({ s }) => !s.hidden);
   const last = visible[visible.length - 1];
   if (!last) return null;
-  doc.transact(() => last.y.set('hidden', true), LOCAL);
+  doc.transact(() => {
+    last.y.set('hidden', true);
+    releaseLengthIfEmpty(doc, trackId);
+  }, LOCAL);
   return last.s.id;
 }
 
@@ -309,7 +327,13 @@ export function redoLayer(doc: Y.Doc, trackId: string, author: string): string |
   const candidates = own.filter(({ s }) => s.hidden && s.seq > newestVisibleSeq);
   const first = candidates[0];
   if (!first) return null;
-  doc.transact(() => first.y.set('hidden', false), LOCAL);
+  doc.transact(() => {
+    const track = roots(doc).tracks.get(trackId);
+    const stored = first.y.get('length48');
+    // Takes from before the length was stored on the layer: their audio is at most one loop long.
+    if (track) claimLength(doc, track, clampLength(typeof stored === 'number' ? stored : first.s.frames));
+    first.y.set('hidden', false);
+  }, LOCAL);
   return first.s.id;
 }
 
@@ -326,8 +350,7 @@ export function clearTrack(doc: Y.Doc, trackId: string): void {
     const track = tracks.get(trackId);
     const sectionId = track?.get('sectionId') as string | undefined;
     for (const [id, l] of [...layers.entries()]) if (l.get('trackId') === trackId) layers.delete(id);
-    const spec = track?.get('lengthSpec') as LengthSpec | undefined;
-    if (track && (!spec || spec.kind === 'free')) track.set('length48', null);
+    releaseLengthIfEmpty(doc, trackId);
     resetReferenceIfUnused(doc, sectionId);
   }, LOCAL);
 }
@@ -410,6 +433,7 @@ export function copyTrackToSection(
         newLayer.set('frames', l.get('frames'));
         newLayer.set('gain', l.get('gain'));
         newLayer.set('hidden', l.get('hidden'));
+        if (typeof l.get('length48') === 'number') newLayer.set('length48', l.get('length48'));
         layers.set(newLayerId, newLayer);
 
         if (store) {
@@ -463,7 +487,7 @@ const SECTION_FIELDS = new Set(['name', 'order', 'referenceLength48', 'beatsPerL
 const TRACK_FIELDS = new Set([
   'sectionId', 'name', 'color', 'order', 'lengthSpec', 'length48', 'volume', 'pan', 'mute', 'solo', 'createdBy', 'effects',
 ]);
-const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden']);
+const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden', 'length48']);
 const EFFECT_FIELDS = new Set(['type', 'enabled', 'order', 'params']);
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -596,6 +620,8 @@ export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'repla
       y.set('frames', frames);
       y.set('gain', clamp(finite(l.gain, 1), 0, 4));
       y.set('hidden', l.hidden === true);
+      const loop = lengthOrNull(l.length48);
+      if (loop !== null) y.set('length48', loop);
       layers.set(id, y);
     }
 
@@ -603,7 +629,9 @@ export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'repla
     for (const [trackId, t] of tracks.entries()) {
       if (typeof t.get('length48') === 'number') continue;
       let longest = 0;
-      for (const l of layers.values()) if (l.get('trackId') === trackId) longest = Math.max(longest, Number(l.get('frames')));
+      for (const l of layers.values()) {
+        if (l.get('trackId') === trackId && l.get('hidden') !== true) longest = Math.max(longest, Number(l.get('frames')));
+      }
       if (longest > 0) t.set('length48', clampLength(longest));
     }
     for (const sectionId of sectionOrder) {

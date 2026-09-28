@@ -91,6 +91,38 @@ describe('session actions', () => {
     expect(visible?.sort()).toEqual(['a1', 'b1']);
   });
 
+  it('undoing every take of a free track makes it free again; redo restores the length', () => {
+    const doc = new Y.Doc();
+    const t = createTrack(doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: 'u1' });
+    addLayer(doc, { ...layer(t, 'u1', 'a1'), frames: 100 });
+    undoLayer(doc, t, 'u1');
+    let snap = readSnapshot(doc);
+    expect(snap.tracks[0]?.length48).toBeNull();
+    expect(snap.referenceLength48).toBeNull();
+    expect(snap.sections[0]?.referenceLength48 ?? null).toBeNull();
+    redoLayer(doc, t, 'u1');
+    snap = readSnapshot(doc);
+    expect(snap.tracks[0]?.length48).toBe(LEN);
+    expect(snap.referenceLength48).toBe(LEN);
+  });
+
+  it('a free track keeps its length while any take is still visible', () => {
+    const doc = new Y.Doc();
+    const t = createTrack(doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: 'u1' });
+    addLayer(doc, layer(t, 'u2', 'b1'));
+    addLayer(doc, layer(t, 'u1', 'a1'));
+    undoLayer(doc, t, 'u1');
+    expect(readSnapshot(doc).tracks[0]?.length48).toBe(LEN);
+  });
+
+  it('undo never resets a track with a fixed length', () => {
+    const doc = new Y.Doc();
+    const t = createTrack(doc, { lengthSpec: { kind: 'seconds', seconds: 2 }, createdBy: 'u1' });
+    addLayer(doc, layer(t, 'u1', 'a1'));
+    undoLayer(doc, t, 'u1');
+    expect(readSnapshot(doc).tracks[0]?.length48).toBe(LEN);
+  });
+
   it('clearing the only free track resets the reference', () => {
     const doc = new Y.Doc();
     const t = createTrack(doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: 'u1' });
