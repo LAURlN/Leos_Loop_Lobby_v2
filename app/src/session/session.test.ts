@@ -341,3 +341,112 @@ describe('sections feature', () => {
     expect(track2After.layers).toHaveLength(2);
   });
 });
+
+describe('AudioSync playback transport', () => {
+  function makeMockEngine(initialFrame = 10000) {
+    let origin: number | null = null;
+    let frame = initialFrame;
+    return {
+      get transportOrigin() {
+        return origin;
+      },
+      setTransportOrigin(o: number | null) {
+        origin = o;
+      },
+      renderFrameNow() {
+        return frame;
+      },
+      advance(frames: number) {
+        frame += frames;
+      },
+      trackIds() {
+        return [];
+      },
+      removeTrack() {},
+      track() {
+        return {
+          setMix() {},
+          syncEffects() {},
+          setBuffer() {},
+        };
+      },
+      setMasterVolume() {},
+      setMetronome() {},
+    };
+  }
+
+  it('pauses, resumes, and preserves offset', async () => {
+    const { AudioSync } = await import('./audioSync');
+    const mockEngine = makeMockEngine(10000);
+    mockEngine.setTransportOrigin(5000);
+    const store = new LayerAudioStore();
+    const sync = new AudioSync(mockEngine as any, store, () => {});
+
+    // Initially playing with elapsed = 10000 - 5000 = 5000
+    expect(mockEngine.transportOrigin).toBe(5000);
+    expect(sync.isPaused).toBe(false);
+
+    // Pause
+    sync.pause();
+    expect(sync.isPaused).toBe(true);
+    expect(mockEngine.transportOrigin).toBeNull();
+    expect(sync.pausedOffset).toBe(5000);
+
+    // Time passes while paused
+    mockEngine.advance(20000); // frame is now 30000
+
+    // Resume
+    sync.resume();
+    expect(sync.isPaused).toBe(false);
+    expect(mockEngine.transportOrigin).toBe(25000); // 30000 - 5000
+    // At resume moment, elapsed is frame (30000) - origin (25000) = 5000
+    expect(mockEngine.renderFrameNow() - mockEngine.transportOrigin!).toBe(5000);
+    expect(sync.pausedOffset).toBeNull();
+  });
+
+  it('restarts to current render frame and clears pause', async () => {
+    const { AudioSync } = await import('./audioSync');
+    const mockEngine = makeMockEngine(20000);
+    mockEngine.setTransportOrigin(10000);
+    const store = new LayerAudioStore();
+    const sync = new AudioSync(mockEngine as any, store, () => {});
+
+    sync.pause();
+    expect(sync.isPaused).toBe(true);
+
+    mockEngine.advance(5000); // frame is 25000
+    sync.restart();
+
+    expect(sync.isPaused).toBe(false);
+    expect(mockEngine.transportOrigin).toBe(25000);
+    // Loop position 0 at current frame
+    expect(mockEngine.renderFrameNow() - mockEngine.transportOrigin!).toBe(0);
+  });
+
+  it('preserves paused state when apply() runs with active tracks', async () => {
+    const { AudioSync } = await import('./audioSync');
+    const mockEngine = makeMockEngine(15000);
+    mockEngine.setTransportOrigin(10000);
+    const store = new LayerAudioStore();
+    const sync = new AudioSync(mockEngine as any, store, () => {});
+
+    sync.pause();
+    expect(sync.isPaused).toBe(true);
+    expect(mockEngine.transportOrigin).toBeNull();
+
+    // Snapshot update with existing track lengths
+    const doc = new Y.Doc();
+    initSession(doc);
+    const snap = readSnapshot(doc);
+    const trackId = createTrack(doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: 'u1' });
+    addLayer(doc, layer(trackId, 'u1'));
+    const updatedSnap = readSnapshot(doc);
+
+    sync.apply(updatedSnap);
+
+    // Must stay paused and not overwrite origin to renderFrameNow()
+    expect(sync.isPaused).toBe(true);
+    expect(mockEngine.transportOrigin).toBeNull();
+  });
+});
+

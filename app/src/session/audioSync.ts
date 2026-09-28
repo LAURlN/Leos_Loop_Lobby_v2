@@ -30,6 +30,8 @@ export class AudioSync {
   private lastSectionId: string | null = null;
   private local: LocalPlayback = { metronomeEnabled: false, metronomeVolume: 0.5, masterVolume: 1 };
   private pending = false;
+  private paused = false;
+  private pausedOffsetLocalFrames: number | null = null;
   /** Layer ids present in the previous snapshot (to free audio of removed ones). */
   private knownLayers = new Set<string>();
 
@@ -40,6 +42,46 @@ export class AudioSync {
   ) {
     // New layer audio (recorded or downloaded) -> remix affected tracks.
     store.onAdded(() => this.scheduleReapply());
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  get pausedOffset(): number | null {
+    return this.pausedOffsetLocalFrames;
+  }
+
+  pause(): void {
+    if (this.paused) return;
+    if (this.engine.transportOrigin !== null) {
+      this.pausedOffsetLocalFrames = Math.max(0, this.engine.renderFrameNow() - this.engine.transportOrigin);
+    } else {
+      this.pausedOffsetLocalFrames = 0;
+    }
+    this.paused = true;
+    this.engine.setTransportOrigin(null);
+  }
+
+  resume(): void {
+    if (!this.paused && this.engine.transportOrigin !== null) return;
+    this.paused = false;
+    const now = this.engine.renderFrameNow();
+    const offset = this.pausedOffsetLocalFrames ?? 0;
+    this.engine.setTransportOrigin(now - offset);
+    this.pausedOffsetLocalFrames = null;
+  }
+
+  restart(): void {
+    this.paused = false;
+    this.pausedOffsetLocalFrames = null;
+    this.engine.setTransportOrigin(this.engine.renderFrameNow());
+  }
+
+  pauseAtZero(): void {
+    this.paused = true;
+    this.pausedOffsetLocalFrames = 0;
+    this.engine.setTransportOrigin(null);
   }
 
   setLocalPlayback(local: LocalPlayback): void {
@@ -61,6 +103,8 @@ export class AudioSync {
     this.knownLayers.clear();
     this.last = null;
     this.lastSectionId = null;
+    this.paused = false;
+    this.pausedOffsetLocalFrames = null;
     this.engine.setTransportOrigin(null);
   }
 
@@ -86,9 +130,15 @@ export class AudioSync {
     // A device that joins a running session (or loads one) simply starts its
     // own transport now. Any origin is valid; see docs/SYNC_MODEL.md.
     const anyLength = currentTracks.some((t) => t.length48 !== null);
-    if (anyLength && this.engine.transportOrigin === null) {
-      this.engine.setTransportOrigin(this.engine.renderFrameNow());
-    } else if (!anyLength && this.engine.transportOrigin !== null) {
+    if (!this.paused) {
+      if (anyLength && this.engine.transportOrigin === null) {
+        this.engine.setTransportOrigin(this.engine.renderFrameNow());
+      } else if (!anyLength && this.engine.transportOrigin !== null) {
+        this.engine.setTransportOrigin(null);
+      }
+    } else if (!anyLength) {
+      this.paused = false;
+      this.pausedOffsetLocalFrames = null;
       this.engine.setTransportOrigin(null);
     }
 

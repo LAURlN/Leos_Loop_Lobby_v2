@@ -44,6 +44,7 @@ export class Lobby {
   finishing = $state.raw<string[]>([]);
   selectedTrackId = $state<string | null>(null);
   activeSectionId = $state<string | null>(null);
+  playbackPaused = $state(false);
   latency = $state.raw<LatencyProfile | null>(null);
   calibrating = $state(false);
   /** Null when the mic works; otherwise why we are in listen-only mode. */
@@ -68,7 +69,12 @@ export class Lobby {
     actions.initSession(this.doc);
     const snap = readSnapshot(this.doc);
     this.activeSectionId = snap.sections[0]?.id ?? null;
-    actions.createTrack(this.doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: this.userId, sectionId: this.activeSectionId ?? undefined });
+    const initialTrackId = actions.createTrack(this.doc, {
+      lengthSpec: { kind: 'free', autoSnap: true },
+      createdBy: this.userId,
+      sectionId: this.activeSectionId ?? undefined,
+    });
+    this.selectedTrackId = initialTrackId;
   }
 
   get name(): string {
@@ -164,9 +170,6 @@ export class Lobby {
     if (this.selectedTrackId && !currentTracks.some((t) => t.id === this.selectedTrackId)) {
       this.selectedTrackId = null;
     }
-    if (!this.selectedTrackId && currentTracks[0]) {
-      this.selectedTrackId = currentTracks[0].id;
-    }
     if (this.recording && !currentTracks.some((t) => t.id === this.recording?.trackId)) {
       this.looper?.cancel();
     }
@@ -179,6 +182,7 @@ export class Lobby {
     this.audioSync?.reset();
     this.store.clear();
     this.visuals = {};
+    this.playbackPaused = false;
     this.attachDoc(doc);
   }
 
@@ -194,6 +198,9 @@ export class Lobby {
       this.notify(`Can't record: ${this.micError}`);
       return;
     }
+    if (this.playbackPaused) {
+      this.resumePlayback();
+    }
     void this.looper?.tap(trackId, eventTime);
   }
 
@@ -208,13 +215,48 @@ export class Lobby {
   /** 0..1 position of the audible playhead in a loop of `length48`, or null when stopped. */
   playheadFraction(length48: number | null): number | null {
     const engine = this.engine;
-    if (!engine || length48 === null || engine.transportOrigin === null) return null;
+    if (!engine || length48 === null) return null;
+    if (this.playbackPaused && this.audioSync?.pausedOffset !== null && this.audioSync?.pausedOffset !== undefined) {
+      return renderPosition(this.audioSync.pausedOffset, 0, engine.sampleRate, length48) / length48;
+    }
+    if (engine.transportOrigin === null) return null;
     return renderPosition(engine.heardFrameAt(), engine.transportOrigin, engine.sampleRate, length48) / length48;
   }
 
   /** Seconds since the current local recording started. */
   recordingSeconds(): number {
     return this.recording ? (performance.now() - this.recording.startedAt) / 1000 : 0;
+  }
+
+  // ---- playback transport -------------------------------------------------------
+
+  get isPlaying(): boolean {
+    return !this.playbackPaused && this.engine?.transportOrigin !== null;
+  }
+
+  get canPlayback(): boolean {
+    return this.activeTracks.some((t) => t.length48 !== null || hasAudio(t)) || this.settings.metronomeEnabled;
+  }
+
+  pausePlayback(): void {
+    if (this.playbackPaused) return;
+    this.audioSync?.pause();
+    this.playbackPaused = true;
+  }
+
+  resumePlayback(): void {
+    this.audioSync?.resume();
+    this.playbackPaused = false;
+  }
+
+  restartPlayback(): void {
+    this.audioSync?.restart();
+    this.playbackPaused = false;
+  }
+
+  togglePlayback(): void {
+    if (this.playbackPaused) this.resumePlayback();
+    else this.pausePlayback();
   }
 
   // ---- sections -----------------------------------------------------------------
@@ -231,8 +273,11 @@ export class Lobby {
     this.activeSectionId = sectionId;
     this.publishPresence();
     const currentTracks = this.snapshot.tracks.filter((t) => t.sectionId === sectionId);
-    if (!currentTracks.some((t) => t.id === this.selectedTrackId)) {
+    if (this.selectedTrackId !== null && !currentTracks.some((t) => t.id === this.selectedTrackId)) {
       this.selectedTrackId = currentTracks[0]?.id ?? null;
+    }
+    if (this.playbackPaused) {
+      this.audioSync?.pauseAtZero();
     }
     this.audioSync?.apply(this.snapshot, sectionId);
   }

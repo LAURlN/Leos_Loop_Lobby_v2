@@ -101,7 +101,13 @@
   }
 </script>
 
-<article class="card" class:selected class:rec={mode === 'recording' || mode === 'overdub'} style:--track={color}>
+<article
+  class="card"
+  class:selected
+  class:rec={mode === 'recording' || mode === 'overdub'}
+  style:--track={color}
+  data-track-id={track.id}
+>
   <header>
     <span class="dot"></span>
     <h3 title={track.name}>{track.name}</h3>

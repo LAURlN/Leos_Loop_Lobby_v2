@@ -46,7 +46,27 @@
     sheetOpen = true;
   }
 
-  /** Desktop shortcuts: 1-9 tap a track, Space taps the selected one, Z undoes. */
+  function onWindowClick(event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const content = target.closest('.content');
+    if (!content) return;
+    const card = target.closest('.card') as HTMLElement | null;
+    if (card) {
+      const trackId = card.dataset.trackId;
+      if (trackId && lobby.selectedTrackId !== trackId) {
+        lobby.selectedTrackId = trackId;
+      }
+      return;
+    }
+    if (target.closest('.side, .add, .copy-tile, button, input, select, textarea, dialog, a')) {
+      return;
+    }
+    lobby.selectedTrackId = null;
+    sheetOpen = false;
+  }
+
+  /** Desktop shortcuts: 1-9 tap a track, Space taps selected (or toggles playback if none), Z undoes. */
   function onkeydown(event: KeyboardEvent) {
     if (!lobby.started || dialog || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement;
@@ -55,16 +75,20 @@
     if (n >= 1 && n <= 9) {
       const track = lobby.activeTracks[n - 1];
       if (track) lobby.tapTrack(track.id, event.timeStamp);
-    } else if (event.key === ' ' && lobby.selectedTrackId) {
+    } else if (event.key === ' ') {
       event.preventDefault();
-      lobby.tapTrack(lobby.selectedTrackId, event.timeStamp);
+      if (lobby.selectedTrackId) {
+        lobby.tapTrack(lobby.selectedTrackId, event.timeStamp);
+      } else {
+        lobby.togglePlayback();
+      }
     } else if (event.key.toLowerCase() === 'z' && lobby.selectedTrackId) {
       lobby.undo(lobby.selectedTrackId);
     }
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window {onkeydown} onclick={onWindowClick} />
 
 {#if !lobby.started}
   <main class="start">
@@ -89,8 +113,47 @@
         </button>
         <button class="icon" aria-label="Settings" onclick={() => (dialog = 'settings')}>⚙</button>
       </div>
-      <div class="topbar-tabs">
-        <SectionTabs />
+      <div class="topbar-row">
+        <div class="topbar-tabs">
+          <SectionTabs />
+        </div>
+        <div class="section-transport" aria-label="Section playback controls">
+          <button
+            type="button"
+            class="transport-btn restart"
+            title="Restart playback of current section"
+            aria-label="Restart playback"
+            disabled={!lobby.canPlayback}
+            onclick={() => lobby.restartPlayback()}
+          >
+            <span class="t-icon">⏮</span>
+            <span class="t-label">Restart</span>
+          </button>
+          <button
+            type="button"
+            class="transport-btn pause"
+            class:active={lobby.playbackPaused}
+            title="Pause playback of current section"
+            aria-label="Pause playback"
+            disabled={!lobby.canPlayback || lobby.playbackPaused}
+            onclick={() => lobby.pausePlayback()}
+          >
+            <span class="t-icon">⏸</span>
+            <span class="t-label">Pause</span>
+          </button>
+          <button
+            type="button"
+            class="transport-btn resume"
+            class:highlight={lobby.playbackPaused && lobby.canPlayback}
+            title="Resume playback of current section"
+            aria-label="Resume playback"
+            disabled={!lobby.canPlayback || !lobby.playbackPaused}
+            onclick={() => lobby.resumePlayback()}
+          >
+            <span class="t-icon">▶</span>
+            <span class="t-label">Resume</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -207,8 +270,73 @@
     gap: 8px;
     width: 100%;
   }
-  .topbar-tabs {
+  .topbar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     width: 100%;
+  }
+  .topbar-tabs {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .section-transport {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 3px 4px;
+    border-radius: var(--radius-sm);
+  }
+  .transport-btn {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 550;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: calc(var(--radius-sm) - 4px);
+    color: var(--muted);
+    transition: all 0.15s ease;
+  }
+  .transport-btn:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-2);
+  }
+  .transport-btn.pause.active {
+    background: rgb(255 193 117 / 0.15);
+    border-color: rgb(255 193 117 / 0.4);
+    color: var(--warn);
+  }
+  .transport-btn.resume.highlight {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06201a;
+    font-weight: 650;
+    box-shadow: 0 0 12px rgb(120 239 202 / 0.35);
+  }
+  .transport-btn.resume.highlight:hover {
+    background: #93f5d8;
+  }
+  .t-icon {
+    font-size: 13px;
+    line-height: 1;
+  }
+  @media (max-width: 600px) {
+    .t-label {
+      display: none;
+    }
+    .transport-btn {
+      padding: 0 8px;
+    }
   }
   .topbar h1 {
     font-size: 18px;
