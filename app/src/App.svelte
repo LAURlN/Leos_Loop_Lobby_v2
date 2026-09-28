@@ -260,8 +260,8 @@
     flex-direction: column;
     gap: 6px;
     padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
-    background: rgb(11 15 25 / 0.85);
-    backdrop-filter: blur(10px);
+    /* Near-opaque instead of backdrop-filter: a blur over spinning discs is re-rendered every frame. */
+    background: rgb(11 15 25 / 0.96);
     border-bottom: 1px solid var(--border);
   }
   .topbar-main {

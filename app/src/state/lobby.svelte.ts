@@ -220,15 +220,27 @@ export class Lobby {
     return this.finishing.includes(trackId);
   }
 
-  /** 0..1 position of the audible playhead in a loop of `length48`, or null when stopped. */
-  playheadFraction(length48: number | null): number | null {
+  /**
+   * 0..1 position of the audible playhead in a loop of `length48`, or null when
+   * stopped. Pass the frame time when drawing many discs: the audio clock is
+   * then read once per frame.
+   */
+  playheadFraction(length48: number | null, at?: number): number | null {
     const engine = this.engine;
     if (!engine || length48 === null) return null;
     if (this.playbackPaused && this.audioSync?.pausedOffset !== null && this.audioSync?.pausedOffset !== undefined) {
       return renderPosition(this.audioSync.pausedOffset, 0, engine.sampleRate, length48) / length48;
     }
     if (engine.transportOrigin === null) return null;
-    return renderPosition(engine.heardFrameAt(), engine.transportOrigin, engine.sampleRate, length48) / length48;
+    return renderPosition(this.heardFrame(engine, at), engine.transportOrigin, engine.sampleRate, length48) / length48;
+  }
+
+  private heardAt = { at: NaN, frame: 0 };
+
+  private heardFrame(engine: AudioEngine, at?: number): number {
+    if (at === undefined) return engine.heardFrameAt();
+    if (this.heardAt.at !== at) this.heardAt = { at, frame: engine.heardFrameAt(at) };
+    return this.heardAt.frame;
   }
 
   /** Seconds since the current local recording started. */

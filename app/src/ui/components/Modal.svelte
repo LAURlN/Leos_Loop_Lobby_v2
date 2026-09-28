@@ -28,8 +28,8 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgb(4 6 12 / 0.6);
-    backdrop-filter: blur(2px);
+    /* No backdrop-filter: blurring the animated discs behind costs a full-screen pass per frame. */
+    background: rgb(4 6 12 / 0.68);
     z-index: 40;
   }
   .modal {

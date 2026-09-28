@@ -2,11 +2,24 @@
  * Draws a track as a spinning "record": the loop's spectrogram is a ring that
  * rotates backwards under a fixed playhead at twelve o'clock, so the slice
  * playing right now is always on top (design from v1).
+ *
+ * Two stacked canvases keep this cheap enough for many discs on a phone:
+ * - `rotor`: disc + spectrogram ring, painted once per mix and spun with a CSS
+ *   transform (composited on the GPU, no repaint per frame);
+ * - `overlay`: rim, playhead, label and stickers, repainted only when they
+ *   change or while something on them animates.
+ * `draw()` is called every frame and returns early when nothing changed.
  */
 import { RECORD_COLOR } from './palette';
 import type { Spectrogram } from './spectrogram';
 
 export type DiscMode = 'empty' | 'recording' | 'overdub' | 'finishing' | 'playing' | 'waiting';
+
+export interface DiscSticker {
+  label: string;
+  color: string;
+  enabled: boolean;
+}
 
 export interface DiscState {
   color: string;
@@ -17,7 +30,7 @@ export interface DiscState {
   playhead: number | null;
   /** 0..1 progress ring while recording, null if unknown. */
   recordProgress: number | null;
-  stickers: Array<{ label: string; color: string; enabled: boolean }>;
+  stickers: DiscSticker[];
   remoteRecording: boolean;
   muted: boolean;
   /** performance.now() in ms, for pulsing. */
@@ -25,49 +38,99 @@ export interface DiscState {
 }
 
 const STICKER_ANGLES = [-38, 128, 208, 38, 250, 160];
+/** The idle "tap to record" pulse is slow; 30 fps looks the same as 60. */
+const SLOW_ANIMATION_MS = 33;
 
 export class DiscRenderer {
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly rotorCtx: CanvasRenderingContext2D;
   private ring: HTMLCanvasElement | null = null;
   private ringKey = '';
+  private rotorKey = '';
+  private overlayKey = '';
+  private lastOverlayTime = 0;
+  private turn = NaN;
+  /** CSS size in px, kept by a ResizeObserver instead of reading layout every frame. */
+  private cssSize: number;
+  private readonly resize: ResizeObserver | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
-    this.ctx = canvas.getContext('2d')!;
+  constructor(
+    private readonly rotor: HTMLCanvasElement,
+    private readonly overlay: HTMLCanvasElement,
+  ) {
+    this.ctx = overlay.getContext('2d')!;
+    this.rotorCtx = rotor.getContext('2d')!;
+    this.cssSize = overlay.clientWidth;
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resize = new ResizeObserver(() => (this.cssSize = overlay.clientWidth));
+      this.resize.observe(overlay);
+    }
+  }
+
+  dispose(): void {
+    this.resize?.disconnect();
   }
 
   draw(s: DiscState): void {
-    const { canvas, ctx } = this;
+    const cssSize = this.cssSize;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const cssSize = canvas.clientWidth;
     const size = Math.round(cssSize * dpr);
     if (size <= 0) return;
-    if (canvas.width !== size || canvas.height !== size) {
-      canvas.width = size;
-      canvas.height = size;
+    for (const canvas of [this.rotor, this.overlay]) {
+      if (canvas.width !== size || canvas.height !== size) {
+        canvas.width = size;
+        canvas.height = size;
+        this.rotorKey = this.overlayKey = '';
+      }
     }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, size, size);
-    ctx.scale(dpr, dpr);
     const c = cssSize / 2;
     const r = c - 10;
-    const recordingLike = s.mode === 'recording' || s.mode === 'overdub';
-    const pulse = 0.5 + 0.5 * Math.sin(s.time / 180);
 
-    // Base disc
+    const rotorKey = `${size}|${s.spectrogram ? s.revision : '-'}|${s.color}|${s.muted}`;
+    if (rotorKey !== this.rotorKey) {
+      this.rotorKey = rotorKey;
+      this.drawRotor(s, c, r, dpr);
+    }
+    const turn = s.spectrogram ? -(s.playhead ?? 0) : 0;
+    if (turn !== this.turn) {
+      this.turn = turn;
+      this.rotor.style.transform = `rotate(${turn}turn)`;
+    }
+
+    // The overlay only changes with these, except while something on it animates.
+    const recordingLike = s.mode === 'recording' || s.mode === 'overdub';
+    const spinning = s.mode === 'finishing' || s.mode === 'waiting';
+    const key = [
+      size,
+      s.mode,
+      s.color,
+      s.playhead !== null,
+      s.remoteRecording,
+      s.stickers.map((st) => `${st.label}${st.color}${st.enabled ? 1 : 0}`).join(','),
+    ].join('|');
+    const animating = recordingLike || spinning || s.remoteRecording;
+    const pulsing = s.mode === 'empty' && s.time - this.lastOverlayTime >= SLOW_ANIMATION_MS;
+    if (key === this.overlayKey && !animating && !pulsing) return;
+    this.overlayKey = key;
+    this.lastOverlayTime = s.time;
+    this.drawOverlay(s, c, r, dpr);
+  }
+
+  /** Disc and spectrogram ring (or empty grooves), unrotated. */
+  private drawRotor(s: DiscState, c: number, r: number, dpr: number): void {
+    const { rotor } = this;
+    const ctx = this.rotorCtx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, rotor.width, rotor.height);
+    ctx.scale(dpr, dpr);
     ctx.beginPath();
     ctx.arc(c, c, r, 0, Math.PI * 2);
     ctx.fillStyle = '#0c111d';
     ctx.fill();
-
-    // Spectrogram ring or empty grooves
     if (s.spectrogram) {
-      const ring = this.ringImage(s, r, dpr);
-      ctx.save();
-      ctx.translate(c, c);
-      ctx.rotate(-(s.playhead ?? 0) * Math.PI * 2);
       ctx.globalAlpha = s.muted ? 0.35 : 1;
-      ctx.drawImage(ring, -r, -r, r * 2, r * 2);
-      ctx.restore();
+      ctx.drawImage(this.ringImage(s, r, dpr), c - r, c - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
     } else {
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 1;
@@ -77,6 +140,15 @@ export class DiscRenderer {
         ctx.stroke();
       }
     }
+  }
+
+  private drawOverlay(s: DiscState, c: number, r: number, dpr: number): void {
+    const { overlay, ctx } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ctx.scale(dpr, dpr);
+    const recordingLike = s.mode === 'recording' || s.mode === 'overdub';
+    const pulse = 0.5 + 0.5 * Math.sin(s.time / 180);
 
     // Outer ring
     ctx.beginPath();
@@ -87,7 +159,7 @@ export class DiscRenderer {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Progress arc (recording) or playhead sweep
+    // Progress arc (recording)
     if (recordingLike && s.recordProgress !== null) {
       ctx.beginPath();
       ctx.arc(c, c, r + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, s.recordProgress));

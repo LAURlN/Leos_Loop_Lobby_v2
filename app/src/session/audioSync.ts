@@ -3,10 +3,10 @@
  * mix/effects parameters, and a freshly mixed loop buffer whenever the set of
  * audible layers changes. Also owns the local transport origin.
  */
-import { mixLayerInto } from '@lll/shared';
 import type { AudioEngine } from '../audio/engine';
 import { computeSpectrogram, type Spectrogram } from '../ui/spectrogram';
 import type { LayerAudioStore } from './layerAudio';
+import { LoopMixer, type MixLayer } from './loopMix';
 import { visibleLayers, type SectionState, type SessionSnapshot, type TrackState } from './schema';
 
 export interface TrackVisual {
@@ -25,6 +25,7 @@ export interface LocalPlayback {
 
 export class AudioSync {
   private mixKeys = new Map<string, string>();
+  private readonly mixer = new LoopMixer();
   private revision = 0;
   private last: SessionSnapshot | null = null;
   private lastSectionId: string | null = null;
@@ -100,6 +101,7 @@ export class AudioSync {
     for (const id of this.engine.trackIds()) this.engine.removeTrack(id);
     for (const id of this.mixKeys.keys()) this.onVisual(id, null);
     this.mixKeys.clear();
+    this.mixer.clear();
     this.knownLayers.clear();
     this.last = null;
     this.lastSectionId = null;
@@ -123,6 +125,7 @@ export class AudioSync {
       if (!ids.has(id)) {
         this.engine.removeTrack(id);
         this.mixKeys.delete(id);
+        this.mixer.forget(id);
         this.onVisual(id, null);
       }
     }
@@ -178,15 +181,17 @@ export class AudioSync {
     this.mixKeys.set(track.id, key);
     const chain = this.engine.track(track.id);
     if (track.length48 === null || available.length === 0) {
+      this.mixer.forget(track.id);
       chain.setBuffer(null);
       this.onVisual(track.id, { spectrogram: null, missingLayers: missing, revision: ++this.revision });
       return;
     }
-    const mix = new Float32Array(track.length48);
+    const parts: MixLayer[] = [];
     for (const layer of available) {
       const data = this.store.get(layer.id);
-      if (data) mixLayerInto(mix, { offset: layer.offset, data }, layer.gain);
+      if (data) parts.push({ id: layer.id, offset: layer.offset, gain: layer.gain, data });
     }
+    const mix = this.mixer.mix(track.id, track.length48, parts);
     const spectrogram = computeSpectrogram(mix);
     chain.setBuffer(mix); // transfers `mix`
     this.onVisual(track.id, { spectrogram, missingLayers: missing, revision: ++this.revision });

@@ -87,6 +87,17 @@ per peer, using the relay for signaling (a new channel number), and a
 Because the CRDT tolerates duplicates and any delivery order, no other code
 needs to change.
 
+## Performance notes
+
+- Discs (`ui/discRenderer.ts`): the spectrogram ring is painted once per mix
+  and spun with a CSS transform; the overlay canvas repaints only on change or
+  while it animates. All discs share one frame loop (`ui/frameLoop.ts`) that
+  skips off-screen cards and reads the audio clock once per frame.
+- `session/loopMix.ts` adds a new take onto the previous mix instead of
+  re-summing every take.
+- Avoid `backdrop-filter` over the track grid: it re-renders every frame the
+  discs move.
+
 ## Project files
 
 Settings -> Project exports the whole session as a `.lll` file (zip with a JSON

@@ -9,12 +9,14 @@
   import { getEffect } from '../../effects/registry';
   import { hasAudio, visibleLayers, type TrackState } from '../../session/schema';
   import { lobby } from '../../state/lobby.svelte';
-  import { DiscRenderer, type DiscMode } from '../discRenderer';
+  import { DiscRenderer, type DiscMode, type DiscSticker } from '../discRenderer';
+  import { onFrame } from '../frameLoop';
   import { trackColor } from '../palette';
 
   let { track, selected, onedit }: { track: TrackState; selected: boolean; onedit: () => void } = $props();
 
-  let canvas: HTMLCanvasElement;
+  let rotor: HTMLCanvasElement;
+  let overlay: HTMLCanvasElement;
   let seconds = $state(0);
 
   const color = $derived(trackColor(track.color));
@@ -59,10 +61,16 @@
     }
   });
 
+  const stickers: DiscSticker[] = $derived(
+    track.effects.flatMap((e) => {
+      const def = getEffect(e.type);
+      return def ? [{ label: def.sticker, color: def.color, enabled: e.enabled }] : [];
+    }),
+  );
+
   onMount(() => {
-    const renderer = new DiscRenderer(canvas);
-    let frame = 0;
-    const loop = (time: number) => {
+    const renderer = new DiscRenderer(rotor, overlay);
+    const stop = onFrame(overlay, (time) => {
       const secs = lobby.isRecording(track.id) ? lobby.recordingSeconds() : 0;
       if (Math.abs(secs - seconds) >= 0.1 || (secs === 0 && seconds !== 0)) seconds = secs;
       const ref = track.length48 ?? lobby.snapshot.referenceLength48;
@@ -71,20 +79,18 @@
         mode,
         spectrogram: visual?.spectrogram ?? null,
         revision: visual?.revision ?? 0,
-        playhead: hasAudio(track) || track.length48 !== null ? lobby.playheadFraction(track.length48) : null,
+        playhead: hasAudio(track) || track.length48 !== null ? lobby.playheadFraction(track.length48, time) : null,
         recordProgress: mode === 'recording' || mode === 'overdub' ? (secs / ((ref ?? CANONICAL_RATE * 8) / CANONICAL_RATE)) % 1 : null,
-        stickers: track.effects.flatMap((e) => {
-          const def = getEffect(e.type);
-          return def ? [{ label: def.sticker, color: def.color, enabled: e.enabled }] : [];
-        }),
+        stickers,
         remoteRecording: remote.length > 0,
         muted: track.mute,
         time,
       });
-      frame = requestAnimationFrame(loop);
+    });
+    return () => {
+      stop();
+      renderer.dispose();
     };
-    frame = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(frame);
   });
 
   function pointerdown(event: PointerEvent) {
@@ -120,7 +126,8 @@
     onkeydown={keydown}
     oncontextmenu={(e) => e.preventDefault()}
   >
-    <canvas bind:this={canvas}></canvas>
+    <canvas class="rotor" bind:this={rotor}></canvas>
+    <canvas class="overlay" bind:this={overlay}></canvas>
   </button>
   <p class="status">{status}</p>
   {#if remote.length}
@@ -182,14 +189,21 @@
     -webkit-user-select: none;
     -webkit-touch-callout: none;
     border-radius: 50%;
+    position: relative;
   }
   .disc:focus-visible {
     outline: 2px solid var(--accent-2);
   }
   canvas {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     display: block;
+  }
+  /* Spun by DiscRenderer with a transform: its own compositor layer, no repaint. */
+  .rotor {
+    will-change: transform;
   }
   .status {
     margin: 4px 0 0;
