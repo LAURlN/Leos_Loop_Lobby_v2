@@ -16,6 +16,14 @@
   const layers = $derived(visibleLayers(track));
   const authors = $derived([...new Set(layers.map((l) => (l.author === lobby.userId ? 'you' : l.authorName)))]);
   let confirmDelete = $state(false);
+  const otherSections = $derived(lobby.snapshot.sections.filter((s) => s.id !== track.sectionId));
+  let copyTargetSectionId = $state<string>('');
+
+  $effect(() => {
+    if ((!copyTargetSectionId || !otherSections.some((s) => s.id === copyTargetSectionId)) && otherSections[0]) {
+      copyTargetSectionId = otherSections[0].id;
+    }
+  });
 
   $effect(() => {
     void track.id;
@@ -57,6 +65,29 @@
       <button class="danger" onclick={() => (confirmDelete = true)}>Delete</button>
     {/if}
   </div>
+
+  {#if otherSections.length > 0}
+    <div class="copy-box">
+      <span class="label">Copy loop to</span>
+      <div class="row">
+        <select bind:value={copyTargetSectionId} class="copy-select" aria-label="Target section">
+          {#each otherSections as sec (sec.id)}
+            <option value={sec.id}>Section {sec.name}</option>
+          {/each}
+        </select>
+        <button
+          type="button"
+          class="copy-btn"
+          disabled={!copyTargetSectionId}
+          onclick={() => {
+            if (copyTargetSectionId) lobby.copyTrackToSection(track.id, copyTargetSectionId);
+          }}
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <section class="stack">
     <h3 class="label">Mix</h3>
@@ -174,5 +205,25 @@
   .small {
     font-size: 13px;
     margin: 0;
+  }
+  .copy-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+  }
+  .copy-select {
+    flex: 1;
+    min-height: 36px;
+    font-size: 14px;
+  }
+  .copy-btn {
+    min-height: 36px;
+    padding: 0 16px;
+    font-size: 14px;
+    font-weight: 600;
   }
 </style>

@@ -28,6 +28,7 @@ export interface Presence {
   peerId: string;
   name: string;
   recordingTrackId: string | null;
+  sectionId?: string | null;
 }
 
 export interface RoomCallbacks {

@@ -5,19 +5,27 @@
 -->
 <script lang="ts">
   import AddTrackDialog from './ui/components/AddTrackDialog.svelte';
+  import CopyLoopsDialog from './ui/components/CopyLoopsDialog.svelte';
   import RoomDialog from './ui/components/RoomDialog.svelte';
+  import SectionTabs from './ui/components/SectionTabs.svelte';
   import SettingsDialog from './ui/components/SettingsDialog.svelte';
   import TrackCard from './ui/components/TrackCard.svelte';
   import TrackPanel from './ui/components/TrackPanel.svelte';
   import { lobby } from './state/lobby.svelte';
 
-  type Dialog = 'add' | 'room' | 'settings' | null;
+  type Dialog = 'add' | 'room' | 'settings' | 'copy' | null;
   let dialog = $state<Dialog>(null);
   let sheetOpen = $state(false);
   let wide = $state(true);
 
   const selected = $derived(lobby.snapshot.tracks.find((t) => t.id === lobby.selectedTrackId) ?? null);
   const invitedTo = new URLSearchParams(location.search).get('room');
+  const otherSectionsWithTracks = $derived(
+    lobby.snapshot.sections.filter(
+      (s) => s.id !== lobby.activeSection?.id && lobby.snapshot.tracks.some((t) => t.sectionId === s.id),
+    ),
+  );
+
   const roomBadge = $derived.by(() => {
     const room = lobby.room;
     if (!room) return null;
@@ -45,7 +53,7 @@
     if (target.closest('input, select, textarea, button')) return;
     const n = Number(event.key);
     if (n >= 1 && n <= 9) {
-      const track = lobby.snapshot.tracks[n - 1];
+      const track = lobby.activeTracks[n - 1];
       if (track) lobby.tapTrack(track.id, event.timeStamp);
     } else if (event.key === ' ' && lobby.selectedTrackId) {
       event.preventDefault();
@@ -73,12 +81,17 @@
 {:else}
   <div class="app" class:wide>
     <header class="topbar">
-      <h1>Loop Lobby</h1>
-      <div class="spacer"></div>
-      <button class="room" class:online={roomBadge?.ok} onclick={() => (dialog = 'room')}>
-        {#if roomBadge}<span class="led"></span>{roomBadge.text}{:else}Multiplayer{/if}
-      </button>
-      <button class="icon" aria-label="Settings" onclick={() => (dialog = 'settings')}>⚙</button>
+      <div class="topbar-main">
+        <h1>Loop Lobby</h1>
+        <div class="spacer"></div>
+        <button class="room" class:online={roomBadge?.ok} onclick={() => (dialog = 'room')}>
+          {#if roomBadge}<span class="led"></span>{roomBadge.text}{:else}Multiplayer{/if}
+        </button>
+        <button class="icon" aria-label="Settings" onclick={() => (dialog = 'settings')}>⚙</button>
+      </div>
+      <div class="topbar-tabs">
+        <SectionTabs />
+      </div>
     </header>
 
     {#if lobby.micError}
@@ -91,13 +104,19 @@
 
     <main class="content">
       <section class="grid" aria-label="Tracks">
-        {#each lobby.snapshot.tracks as track (track.id)}
+        {#each lobby.activeTracks as track (track.id)}
           <TrackCard {track} selected={track.id === lobby.selectedTrackId} onedit={() => edit(track.id)} />
         {/each}
         <button class="add" onclick={() => (dialog = 'add')}>
           <span class="plus">+</span>
           Add track
         </button>
+        {#if otherSectionsWithTracks.length > 0}
+          <button class="add copy-tile" onclick={() => (dialog = 'copy')}>
+            <span class="copy-icon">📥</span>
+            Copy loops
+          </button>
+        {/if}
       </section>
 
       {#if wide && selected}
@@ -117,6 +136,7 @@
   {/if}
 
   {#if dialog === 'add'}<AddTrackDialog onclose={() => (dialog = null)} />{/if}
+  {#if dialog === 'copy'}<CopyLoopsDialog onclose={() => (dialog = null)} />{/if}
   {#if dialog === 'room'}<RoomDialog onclose={() => (dialog = null)} />{/if}
   {#if dialog === 'settings'}<SettingsDialog onclose={() => (dialog = null)} />{/if}
 {/if}
@@ -174,12 +194,21 @@
     top: 0;
     z-index: 10;
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px;
+    flex-direction: column;
+    gap: 6px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
     background: rgb(11 15 25 / 0.85);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
+  }
+  .topbar-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .topbar-tabs {
+    width: 100%;
   }
   .topbar h1 {
     font-size: 18px;
@@ -244,6 +273,17 @@
     font-size: 40px;
     line-height: 1;
     color: var(--accent);
+  }
+  .copy-tile {
+    border-color: rgb(183 148 255 / 0.35);
+  }
+  .copy-tile:hover {
+    border-color: var(--accent-2);
+    color: var(--text);
+  }
+  .copy-tile .copy-icon {
+    font-size: 32px;
+    line-height: 1;
   }
   .side {
     width: var(--panel-width);

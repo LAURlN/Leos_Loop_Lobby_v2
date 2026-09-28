@@ -7,7 +7,7 @@ import { mixLayerInto } from '@lll/shared';
 import type { AudioEngine } from '../audio/engine';
 import { computeSpectrogram, type Spectrogram } from '../ui/spectrogram';
 import type { LayerAudioStore } from './layerAudio';
-import { visibleLayers, type SessionSnapshot, type TrackState } from './schema';
+import { visibleLayers, type SectionState, type SessionSnapshot, type TrackState } from './schema';
 
 export interface TrackVisual {
   spectrogram: Spectrogram | null;
@@ -27,6 +27,7 @@ export class AudioSync {
   private mixKeys = new Map<string, string>();
   private revision = 0;
   private last: SessionSnapshot | null = null;
+  private lastSectionId: string | null = null;
   private local: LocalPlayback = { metronomeEnabled: false, metronomeVolume: 0.5, masterVolume: 1 };
   private pending = false;
   /** Layer ids present in the previous snapshot (to free audio of removed ones). */
@@ -44,7 +45,12 @@ export class AudioSync {
   setLocalPlayback(local: LocalPlayback): void {
     this.local = local;
     this.engine.setMasterVolume(local.masterVolume);
-    if (this.last) this.applyMetronome(this.last);
+    if (this.last) {
+      const currentSection = this.lastSectionId
+        ? this.last.sections.find((s) => s.id === this.lastSectionId)
+        : this.last.sections[0];
+      this.applyMetronome(this.last, currentSection);
+    }
   }
 
   /** Forgets cached mixes, e.g. after switching to another session. */
@@ -54,12 +60,21 @@ export class AudioSync {
     this.mixKeys.clear();
     this.knownLayers.clear();
     this.last = null;
+    this.lastSectionId = null;
     this.engine.setTransportOrigin(null);
   }
 
-  apply(snapshot: SessionSnapshot): void {
+  apply(snapshot: SessionSnapshot, activeSectionId?: string | null): void {
     this.last = snapshot;
-    const ids = new Set(snapshot.tracks.map((t) => t.id));
+    this.lastSectionId = activeSectionId ?? null;
+
+    const currentSectionId = activeSectionId ?? snapshot.sections[0]?.id ?? null;
+    const currentTracks = currentSectionId
+      ? snapshot.tracks.filter((t) => t.sectionId === currentSectionId)
+      : snapshot.tracks;
+    const currentSection = snapshot.sections.find((s) => s.id === currentSectionId) ?? null;
+
+    const ids = new Set(currentTracks.map((t) => t.id));
     for (const id of this.engine.trackIds()) {
       if (!ids.has(id)) {
         this.engine.removeTrack(id);
@@ -70,21 +85,21 @@ export class AudioSync {
 
     // A device that joins a running session (or loads one) simply starts its
     // own transport now. Any origin is valid; see docs/SYNC_MODEL.md.
-    const anyLength = snapshot.tracks.some((t) => t.length48 !== null);
+    const anyLength = currentTracks.some((t) => t.length48 !== null);
     if (anyLength && this.engine.transportOrigin === null) {
       this.engine.setTransportOrigin(this.engine.renderFrameNow());
     } else if (!anyLength && this.engine.transportOrigin !== null) {
       this.engine.setTransportOrigin(null);
     }
 
-    const anySolo = snapshot.tracks.some((t) => t.solo);
-    for (const track of snapshot.tracks) {
+    const anySolo = currentTracks.some((t) => t.solo);
+    for (const track of currentTracks) {
       const chain = this.engine.track(track.id);
       chain.setMix(track.volume, track.pan, !track.mute && (!anySolo || track.solo));
       chain.syncEffects(track.effects);
       this.syncMix(track);
     }
-    this.applyMetronome(snapshot);
+    this.applyMetronome(snapshot, currentSection);
     // Only free audio of layers that existed and are gone now. Audio can arrive
     // *before* its layer metadata (own takes, early downloads), so never drop
     // audio merely because the snapshot does not know it yet.
@@ -93,11 +108,11 @@ export class AudioSync {
     this.knownLayers = current;
   }
 
-  private applyMetronome(snapshot: SessionSnapshot): void {
+  private applyMetronome(snapshot: SessionSnapshot, section?: SectionState | null): void {
     this.engine.setMetronome({
       enabled: this.local.metronomeEnabled,
-      loopLength48: snapshot.referenceLength48,
-      beatsPerLoop: snapshot.beatsPerLoop,
+      loopLength48: section?.referenceLength48 ?? snapshot.referenceLength48,
+      beatsPerLoop: section?.beatsPerLoop ?? snapshot.beatsPerLoop,
       volume: this.local.metronomeVolume,
     });
   }
@@ -132,7 +147,7 @@ export class AudioSync {
     this.pending = true;
     queueMicrotask(() => {
       this.pending = false;
-      if (this.last) this.apply(this.last);
+      if (this.last) this.apply(this.last, this.lastSectionId);
     });
   }
 }

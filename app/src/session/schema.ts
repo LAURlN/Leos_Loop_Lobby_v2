@@ -18,6 +18,15 @@ import type { LengthSpec } from '@lll/shared';
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_BEATS_PER_LOOP = 4;
 
+export interface SectionState {
+  id: string;
+  name: string;
+  order: number;
+  referenceLength48: number | null;
+  beatsPerLoop: number;
+  createdBy: string;
+}
+
 export interface EffectState {
   id: string;
   type: string;
@@ -43,6 +52,7 @@ export interface LayerState {
 
 export interface TrackState {
   id: string;
+  sectionId: string;
   name: string;
   color: number;
   order: number;
@@ -60,6 +70,7 @@ export interface TrackState {
 }
 
 export interface SessionSnapshot {
+  sections: SectionState[];
   /** Length of the first recorded loop; other tracks relate to it. */
   referenceLength48: number | null;
   beatsPerLoop: number;
@@ -68,12 +79,14 @@ export interface SessionSnapshot {
 
 export type YTrack = Y.Map<unknown>;
 export type YLayer = Y.Map<unknown>;
+export type YSection = Y.Map<unknown>;
 
 export function roots(doc: Y.Doc) {
   return {
     meta: doc.getMap<unknown>('meta'),
     tracks: doc.getMap<YTrack>('tracks'),
     layers: doc.getMap<YLayer>('layers'),
+    sections: doc.getMap<YSection>('sections'),
   };
 }
 
@@ -124,7 +137,7 @@ export function readLayer(id: string, l: YLayer): LayerState {
 
 /** Builds a plain, immutable snapshot of the whole session. Cheap enough to run on every change. */
 export function readSnapshot(doc: Y.Doc): SessionSnapshot {
-  const { meta, tracks, layers } = roots(doc);
+  const { meta, tracks, layers, sections } = roots(doc);
   const layersByTrack = new Map<string, LayerState[]>();
   for (const [id, l] of layers.entries()) {
     const layer = readLayer(id, l);
@@ -132,11 +145,44 @@ export function readSnapshot(doc: Y.Doc): SessionSnapshot {
     list.push(layer);
     layersByTrack.set(layer.trackId, list);
   }
+
+  const sectionList: SectionState[] = [];
+  for (const [id, s] of sections.entries()) {
+    const ref = s.get('referenceLength48');
+    sectionList.push({
+      id,
+      name: str(s.get('name'), '1'),
+      order: num(s.get('order'), 0),
+      referenceLength48: typeof ref === 'number' && ref > 0 ? ref : null,
+      beatsPerLoop: num(s.get('beatsPerLoop'), DEFAULT_BEATS_PER_LOOP),
+      createdBy: str(s.get('createdBy')),
+    });
+  }
+  sectionList.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+
+  // If no sections exist yet (e.g. uninitialized doc), provide a default section
+  const fallbackSectionId = sectionList[0]?.id ?? 'default';
+  if (sectionList.length === 0) {
+    const ref = meta.get('referenceLength48');
+    sectionList.push({
+      id: fallbackSectionId,
+      name: '1',
+      order: 0,
+      referenceLength48: typeof ref === 'number' && ref > 0 ? ref : null,
+      beatsPerLoop: num(meta.get('beatsPerLoop'), DEFAULT_BEATS_PER_LOOP),
+      createdBy: '',
+    });
+  }
+
+  const validSectionIds = new Set(sectionList.map((s) => s.id));
   const trackList: TrackState[] = [];
   for (const [id, t] of tracks.entries()) {
     const length = t.get('length48');
+    const rawSectionId = str(t.get('sectionId'));
+    const sectionId = validSectionIds.has(rawSectionId) ? rawSectionId : fallbackSectionId;
     trackList.push({
       id,
+      sectionId,
       name: str(t.get('name'), 'Track'),
       color: num(t.get('color'), 0),
       order: num(t.get('order'), 0),
@@ -154,6 +200,7 @@ export function readSnapshot(doc: Y.Doc): SessionSnapshot {
   trackList.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const ref = meta.get('referenceLength48');
   return {
+    sections: sectionList,
     referenceLength48: typeof ref === 'number' && ref > 0 ? ref : null,
     beatsPerLoop: num(meta.get('beatsPerLoop'), DEFAULT_BEATS_PER_LOOP),
     tracks: trackList,

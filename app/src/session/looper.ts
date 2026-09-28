@@ -139,7 +139,8 @@ export class Looper {
         this.deps.notify('Too short - tap again a bit later to close the loop.');
         return;
       }
-      const ref = snapshot.referenceLength48;
+      const section = snapshot.sections.find((s) => s.id === track.sectionId);
+      const ref = section?.referenceLength48 ?? snapshot.referenceLength48;
       const spec = track.lengthSpec;
       length48 =
         ref !== null && spec.kind === 'free' && spec.autoSnap ? autoSnapLength(captured48, ref) : clampLength(captured48);

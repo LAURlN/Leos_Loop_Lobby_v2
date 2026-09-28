@@ -16,7 +16,7 @@ import * as actions from '../session/actions';
 import { AudioSync, type TrackVisual } from '../session/audioSync';
 import { LayerAudioStore } from '../session/layerAudio';
 import { Looper, type LocalRecording } from '../session/looper';
-import { hasAudio, readSnapshot, type SessionSnapshot } from '../session/schema';
+import { hasAudio, readSnapshot, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
 import { displayName, loadSettings, saveSettings, tabUserId, type Settings } from './settings';
 
 export interface RoomState {
@@ -31,7 +31,7 @@ export interface Toast {
   message: string;
 }
 
-const EMPTY: SessionSnapshot = { referenceLength48: null, beatsPerLoop: 4, tracks: [] };
+const EMPTY: SessionSnapshot = { sections: [], referenceLength48: null, beatsPerLoop: 4, tracks: [] };
 
 export class Lobby {
   // ---- reactive state -----------------------------------------------------
@@ -43,6 +43,7 @@ export class Lobby {
   recording = $state.raw<LocalRecording | null>(null);
   finishing = $state.raw<string[]>([]);
   selectedTrackId = $state<string | null>(null);
+  activeSectionId = $state<string | null>(null);
   latency = $state.raw<LatencyProfile | null>(null);
   calibrating = $state(false);
   /** Null when the mic works; otherwise why we are in listen-only mode. */
@@ -65,11 +66,26 @@ export class Lobby {
   constructor() {
     this.attachDoc(this.doc);
     actions.initSession(this.doc);
-    actions.createTrack(this.doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: this.userId });
+    const snap = readSnapshot(this.doc);
+    this.activeSectionId = snap.sections[0]?.id ?? null;
+    actions.createTrack(this.doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy: this.userId, sectionId: this.activeSectionId ?? undefined });
   }
 
   get name(): string {
     return displayName(this.settings);
+  }
+
+  get sections(): SectionState[] {
+    return this.snapshot.sections;
+  }
+
+  get activeSection(): SectionState | null {
+    return this.snapshot.sections.find((s) => s.id === this.activeSectionId) ?? this.snapshot.sections[0] ?? null;
+  }
+
+  get activeTracks(): TrackState[] {
+    const sec = this.activeSection;
+    return sec ? this.snapshot.tracks.filter((t) => t.sectionId === sec.id) : [];
   }
 
   // ---- startup --------------------------------------------------------------
@@ -103,7 +119,7 @@ export class Lobby {
         this.publishPresence();
       });
       this.applyLocalPlayback();
-      this.audioSync.apply(this.snapshot);
+      this.audioSync.apply(this.snapshot, this.activeSectionId);
       this.started = true;
 
       const code = new URLSearchParams(location.search).get('room');
@@ -139,10 +155,22 @@ export class Lobby {
   private refreshSnapshot(): void {
     const snap = readSnapshot(this.doc);
     this.snapshot = snap;
-    if (this.selectedTrackId && !snap.tracks.some((t) => t.id === this.selectedTrackId)) this.selectedTrackId = null;
-    if (!this.selectedTrackId && snap.tracks[0]) this.selectedTrackId = snap.tracks[0].id;
-    if (this.recording && !snap.tracks.some((t) => t.id === this.recording?.trackId)) this.looper?.cancel();
-    this.audioSync?.apply(snap);
+    if (!this.activeSectionId || !snap.sections.some((s) => s.id === this.activeSectionId)) {
+      this.activeSectionId = snap.sections[0]?.id ?? null;
+    }
+    const currentTracks = this.activeSectionId
+      ? snap.tracks.filter((t) => t.sectionId === this.activeSectionId)
+      : snap.tracks;
+    if (this.selectedTrackId && !currentTracks.some((t) => t.id === this.selectedTrackId)) {
+      this.selectedTrackId = null;
+    }
+    if (!this.selectedTrackId && currentTracks[0]) {
+      this.selectedTrackId = currentTracks[0].id;
+    }
+    if (this.recording && !currentTracks.some((t) => t.id === this.recording?.trackId)) {
+      this.looper?.cancel();
+    }
+    this.audioSync?.apply(snap, this.activeSectionId);
   }
 
   /** Replaces the whole session (joining a room starts from the room's state). */
@@ -189,8 +217,83 @@ export class Lobby {
     return this.recording ? (performance.now() - this.recording.startedAt) / 1000 : 0;
   }
 
+  // ---- sections -----------------------------------------------------------------
+
+  createSection(name?: string): string {
+    const id = actions.createSection(this.doc, { name, createdBy: this.userId });
+    this.selectSection(id);
+    return id;
+  }
+
+  selectSection(sectionId: string): void {
+    if (this.activeSectionId === sectionId) return;
+    if (this.recording) this.looper?.cancel();
+    this.activeSectionId = sectionId;
+    this.publishPresence();
+    const currentTracks = this.snapshot.tracks.filter((t) => t.sectionId === sectionId);
+    if (!currentTracks.some((t) => t.id === this.selectedTrackId)) {
+      this.selectedTrackId = currentTracks[0]?.id ?? null;
+    }
+    this.audioSync?.apply(this.snapshot, sectionId);
+  }
+
+  deleteSection(sectionId: string): void {
+    if (this.snapshot.sections.length <= 1) {
+      this.notify('Cannot delete the only section.');
+      return;
+    }
+    if (this.activeSectionId === sectionId) {
+      const idx = this.snapshot.sections.findIndex((s) => s.id === sectionId);
+      const next = this.snapshot.sections[idx + 1] ?? this.snapshot.sections[idx - 1] ?? this.snapshot.sections[0];
+      if (next) this.selectSection(next.id);
+    }
+    actions.deleteSection(this.doc, sectionId);
+  }
+
+  renameSection(sectionId: string, name: string): void {
+    actions.renameSection(this.doc, sectionId, name);
+  }
+
+  moveSection(sectionId: string, direction: 'left' | 'right'): void {
+    actions.moveSection(this.doc, sectionId, direction);
+  }
+
+  reorderSection(sectionId: string, targetIndex: number): void {
+    actions.reorderSection(this.doc, sectionId, targetIndex);
+  }
+
+  copyTrackToSection(trackId: string, targetSectionId: string): string | null {
+    const id = actions.copyTrackToSection(this.doc, trackId, targetSectionId, this.userId, this.store);
+    if (id) {
+      const targetSec = this.snapshot.sections.find((s) => s.id === targetSectionId);
+      this.notify(`Loop copied to Section ${targetSec?.name ?? ''}`);
+    }
+    return id;
+  }
+
+  copyTracksToSection(trackIds: string[], targetSectionId: string): string[] {
+    const ids = actions.copyTracksToSection(this.doc, trackIds, targetSectionId, this.userId, this.store);
+    if (ids.length) {
+      const targetSec = this.snapshot.sections.find((s) => s.id === targetSectionId);
+      this.notify(
+        ids.length === 1
+          ? `1 loop copied to Section ${targetSec?.name ?? ''}`
+          : `${ids.length} loops copied to Section ${targetSec?.name ?? ''}`,
+      );
+    }
+    return ids;
+  }
+
+  peersInSection(sectionId: string): Presence[] {
+    return (this.room?.presence ?? []).filter((p) => p.sectionId === sectionId);
+  }
+
+  // ---- tracks -------------------------------------------------------------------
+
   addTrack(lengthSpec: LengthSpec, name?: string): void {
-    const id = actions.createTrack(this.doc, { lengthSpec, createdBy: this.userId, name });
+    const sectionId = this.activeSectionId ?? this.snapshot.sections[0]?.id;
+    if (!sectionId) return;
+    const id = actions.createTrack(this.doc, { lengthSpec, createdBy: this.userId, name, sectionId });
     this.selectedTrackId = id;
   }
 
@@ -205,6 +308,7 @@ export class Lobby {
   clearSession(): void {
     this.looper?.cancel();
     actions.clearSession(this.doc, this.userId);
+    this.activeSectionId = this.snapshot.sections[0]?.id ?? null;
   }
 
   undo(trackId: string): void {
@@ -429,6 +533,7 @@ export class Lobby {
       peerId: this.userId,
       name: this.name,
       recordingTrackId: this.recording?.trackId ?? null,
+      sectionId: this.activeSectionId,
     });
   }
 
