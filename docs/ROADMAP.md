@@ -17,6 +17,7 @@ Status as of the first v2 milestone. Items carried over from v1's
 - Listen-only mode without microphone; `?testmic` synthetic input
 - One responsive UI for phone and desktop; keyboard shortcuts on desktop
 - Song sections: tab bar with reordering, renaming, peer presence and isolated loop copying
+- Full song view: all sections in order on a timeline, played back to back
 - Project export/import (`.lll` files, forward/backward compatible, ADR 0006)
 - GitHub Pages deployment workflow
 

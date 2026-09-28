@@ -25,6 +25,7 @@ import {
   withFreshIds,
 } from '../session/projectFile';
 import { hasAudio, readSnapshot, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
+import { songPlan as planSong, type SongPlan } from '../session/song';
 import { displayName, loadSettings, saveSettings, tabUserId, type Settings } from './settings';
 
 export interface RoomState {
@@ -52,6 +53,9 @@ export class Lobby {
   finishing = $state.raw<string[]>([]);
   selectedTrackId = $state<string | null>(null);
   activeSectionId = $state<string | null>(null);
+  /** Full song view: all sections in order, played back to back (local only). */
+  songView = $state(false);
+  /** In the song view: true while the song is stopped or paused. */
   playbackPaused = $state(false);
   latency = $state.raw<LatencyProfile | null>(null);
   calibrating = $state(false);
@@ -95,6 +99,10 @@ export class Lobby {
 
   get activeSection(): SectionState | null {
     return this.snapshot.sections.find((s) => s.id === this.activeSectionId) ?? this.snapshot.sections[0] ?? null;
+  }
+
+  get songPlan(): SongPlan {
+    return planSong(this.snapshot);
   }
 
   get activeTracks(): TrackState[] {
@@ -187,6 +195,7 @@ export class Lobby {
   /** Replaces the whole session (joining a room starts from the room's state). */
   private replaceDoc(doc: Y.Doc): void {
     this.looper?.cancel();
+    this.songView = false;
     this.audioSync?.reset();
     this.store.clear();
     this.visuals = {};
@@ -201,6 +210,7 @@ export class Lobby {
   // ---- looping ------------------------------------------------------------------
 
   tapTrack(trackId: string, eventTime?: number): void {
+    if (this.songView) return;
     this.selectedTrackId = trackId;
     if (this.micError) {
       this.notify(`Can't record: ${this.micError}`);
@@ -255,23 +265,77 @@ export class Lobby {
   }
 
   get canPlayback(): boolean {
+    if (this.songView) return this.songPlan.total48 > 0;
     return this.activeTracks.some((t) => t.length48 !== null || hasAudio(t)) || this.settings.metronomeEnabled;
   }
 
   pausePlayback(): void {
     if (this.playbackPaused) return;
-    this.audioSync?.pause();
+    if (this.songView) this.audioSync?.pauseSong();
+    else this.audioSync?.pause();
     this.playbackPaused = true;
   }
 
   resumePlayback(): void {
-    this.audioSync?.resume();
+    if (this.songView) {
+      if (!this.canPlayback) return;
+      this.audioSync?.playSong();
+    } else {
+      this.audioSync?.resume();
+    }
     this.playbackPaused = false;
   }
 
   restartPlayback(): void {
-    this.audioSync?.restart();
+    if (this.songView) {
+      if (!this.canPlayback) return;
+      this.audioSync?.playSong(0);
+    } else {
+      this.audioSync?.restart();
+    }
     this.playbackPaused = false;
+  }
+
+  // ---- full song view -------------------------------------------------------------
+
+  /** Opens the song view (stopped at the start). Section looping stops meanwhile. */
+  openSongView(): void {
+    if (this.songView) return;
+    this.looper?.cancel();
+    this.songView = true;
+    this.playbackPaused = true;
+    this.audioSync?.enterSong();
+    this.publishPresence();
+  }
+
+  /** Back to the active section, which loops again from its start. */
+  closeSongView(): void {
+    if (!this.songView) return;
+    this.songView = false;
+    this.playbackPaused = false;
+    this.audioSync?.leaveSong(this.activeSectionId);
+    this.publishPresence();
+  }
+
+  /** Audible song position in canonical frames (pass the frame time when drawing). */
+  songPosition48(at?: number): number {
+    const engine = this.engine;
+    if (!engine || !this.audioSync) return 0;
+    return this.audioSync.songPosition48(this.heardFrame(engine, at));
+  }
+
+  seekSong(pos48: number): void {
+    this.audioSync?.seekSong(pos48);
+  }
+
+  /** Called every frame by the song view: stops at the end of the song. */
+  tickSong(at: number): void {
+    if (!this.songView || this.playbackPaused) return;
+    if (this.songPosition48(at) >= this.songPlan.total48) {
+      this.audioSync?.pauseSong();
+      this.audioSync?.seekSong(0);
+      this.playbackPaused = true;
+    }
   }
 
   togglePlayback(): void {
@@ -288,6 +352,13 @@ export class Lobby {
   }
 
   selectSection(sectionId: string): void {
+    if (this.songView) {
+      this.activeSectionId = sectionId;
+      this.closeSongView();
+      const tracks = this.snapshot.tracks.filter((t) => t.sectionId === sectionId);
+      if (!tracks.some((t) => t.id === this.selectedTrackId)) this.selectedTrackId = tracks[0]?.id ?? null;
+      return;
+    }
     if (this.activeSectionId === sectionId) return;
     if (this.recording) this.looper?.cancel();
     this.activeSectionId = sectionId;
@@ -648,7 +719,7 @@ export class Lobby {
       peerId: this.userId,
       name: this.name,
       recordingTrackId: this.recording?.trackId ?? null,
-      sectionId: this.activeSectionId,
+      sectionId: this.songView ? null : this.activeSectionId,
     });
   }
 

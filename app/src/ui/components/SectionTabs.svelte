@@ -1,5 +1,6 @@
 <!--
   Browser-like section tabs in the top bar:
+  - "Song" tab on the left: full song view with all sections in order
   - Tab selection, inline renaming (double click / edit button)
   - Drag-and-drop reordering + accessible ← / → buttons
   - Section deletion ('×' with confirmation when containing loops)
@@ -100,8 +101,29 @@
 
 <nav class="tabs-bar" aria-label="Sections">
   <div class="tabs-list" role="tablist">
+    <div class="tab-wrapper">
+      <div
+        class="tab song-tab"
+        class:active={lobby.songView}
+        role="tab"
+        aria-selected={lobby.songView}
+        tabindex="0"
+        title="Full song: all sections in order"
+        onclick={() => lobby.openSongView()}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            lobby.openSongView();
+          }
+        }}
+      >
+        <span aria-hidden="true">♫</span>
+        <span class="tab-title">Song</span>
+      </div>
+    </div>
+    <span class="song-divider" aria-hidden="true"></span>
     {#each sections as sec, index (sec.id)}
-      {@const isActive = sec.id === activeSectionId}
+      {@const isActive = !lobby.songView && sec.id === activeSectionId}
       {@const peers = lobby.peersInSection(sec.id)}
       {@const isEditing = editingId === sec.id}
       {@const isConfirmDelete = confirmDeleteId === sec.id}
@@ -292,6 +314,17 @@
     border-color: var(--accent);
     color: var(--text);
     box-shadow: 0 2px 8px rgb(0 0 0 / 0.3), inset 0 -2px 0 var(--accent);
+  }
+
+  .song-tab {
+    gap: 6px;
+  }
+  .song-divider {
+    width: 1px;
+    height: 22px;
+    margin: 0 4px;
+    background: var(--border);
+    flex: none;
   }
 
   .tab-title {

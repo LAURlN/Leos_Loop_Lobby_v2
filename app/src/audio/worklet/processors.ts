@@ -8,20 +8,30 @@
  */
 // Only the dependency-free timing module: the worklet scope has no TextEncoder, DOM, etc.
 import { CANONICAL_RATE, mod } from '@lll/shared/timing';
-import { PROCESSOR, type MetronomeMessage, type TrackPlayerMessage } from '../messages';
+import { PROCESSOR, type MetronomeMessage, type MetronomeSegment, type TrackPlayerMessage } from '../messages';
+
+/** Fade at the edges of a play window, so section changes do not click. */
+const WINDOW_FADE_SECONDS = 0.005;
 
 /** Plays one track's mixed loop buffer (canonical rate) following the transport. */
 class TrackPlayerProcessor extends AudioWorkletProcessor {
   private buffer: Float32Array | null = null;
   private origin: number | null = null;
+  private start = -Infinity;
+  private end = Infinity;
   private readonly step = CANONICAL_RATE / sampleRate;
+  private readonly fade = Math.max(1, Math.round(sampleRate * WINDOW_FADE_SECONDS));
 
   constructor() {
     super();
     this.port.onmessage = (event: MessageEvent<TrackPlayerMessage>) => {
       const msg = event.data;
       if (msg.type === 'buffer') this.buffer = msg.data && msg.data.length > 0 ? msg.data : null;
-      else if (msg.type === 'transport') this.origin = msg.origin;
+      else if (msg.type === 'transport') {
+        this.origin = msg.origin;
+        this.start = msg.start ?? -Infinity;
+        this.end = msg.end ?? Infinity;
+      }
     };
   }
 
@@ -29,10 +39,12 @@ class TrackPlayerProcessor extends AudioWorkletProcessor {
     const out = outputs[0]?.[0];
     const buffer = this.buffer;
     if (!out) return true;
-    if (!buffer || this.origin === null) {
+    const blockEnd = currentFrame + out.length;
+    if (!buffer || this.origin === null || blockEnd <= this.start || currentFrame >= this.end) {
       out.fill(0);
       return true;
     }
+    const windowed = currentFrame < this.start + this.fade || blockEnd > this.end - this.fade;
     const length = buffer.length;
     let pos = mod((currentFrame - this.origin) * this.step, length);
     for (let i = 0; i < out.length; i++) {
@@ -41,6 +53,10 @@ class TrackPlayerProcessor extends AudioWorkletProcessor {
       const a = buffer[i0] ?? 0;
       const b = buffer[i0 + 1 === length ? 0 : i0 + 1] ?? 0;
       out[i] = a + (b - a) * frac;
+      if (windowed) {
+        const frame = currentFrame + i;
+        out[i]! *= Math.max(0, Math.min(1, (frame - this.start) / this.fade, (this.end - frame) / this.fade));
+      }
       pos += this.step;
       if (pos >= length) pos -= length;
     }
@@ -83,6 +99,7 @@ class MetronomeProcessor extends AudioWorkletProcessor {
   private clickPhase = -1; // samples into the current click, -1 = silent
   private clickAccent = false;
   private lastBeat = -1;
+  private segments: MetronomeSegment[] | null = null;
   private readonly step = CANONICAL_RATE / sampleRate;
   private readonly clickFrames = Math.round(sampleRate * 0.03);
 
@@ -92,6 +109,9 @@ class MetronomeProcessor extends AudioWorkletProcessor {
       const msg = event.data;
       if (msg.type === 'transport') {
         this.origin = msg.origin;
+        this.lastBeat = -1;
+      } else if (msg.type === 'segments') {
+        this.segments = msg.segments;
         this.lastBeat = -1;
       } else {
         this.enabled = msg.enabled;
@@ -105,6 +125,7 @@ class MetronomeProcessor extends AudioWorkletProcessor {
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     const out = outputs[0]?.[0];
     if (!out) return true;
+    if (this.segments) return this.processSegments(out, this.segments);
     const length = this.loopLength48;
     const active = this.enabled && this.origin !== null && length !== null && length > 0;
     const beatLength = active ? length / this.beatsPerLoop : 1;
@@ -132,6 +153,40 @@ class MetronomeProcessor extends AudioWorkletProcessor {
       out[i] = sample;
     }
     return true;
+  }
+
+  private processSegments(out: Float32Array, segments: MetronomeSegment[]): boolean {
+    for (let i = 0; i < out.length; i++) {
+      const frame = currentFrame + i;
+      if (this.enabled) {
+        const index = segments.findIndex((s) => frame >= s.start && frame < s.end);
+        const seg = segments[index];
+        if (seg) {
+          const beatLength = seg.loopLength48 / Math.max(1, seg.beatsPerLoop);
+          const beat = Math.floor(mod((frame - seg.origin) * this.step, seg.loopLength48) / beatLength);
+          // Unique per segment, so a new section always starts with its accent.
+          const key = index * 1024 + beat;
+          if (key !== this.lastBeat) {
+            this.lastBeat = key;
+            this.clickPhase = 0;
+            this.clickAccent = beat === 0;
+          }
+        }
+      }
+      out[i] = this.clickSample();
+    }
+    return true;
+  }
+
+  private clickSample(): number {
+    if (this.clickPhase < 0) return 0;
+    const t = this.clickPhase / sampleRate;
+    const env = 1 - this.clickPhase / this.clickFrames;
+    const freq = this.clickAccent ? 1760 : 1175;
+    const sample = Math.sin(2 * Math.PI * freq * t) * env * env * this.volume;
+    this.clickPhase++;
+    if (this.clickPhase >= this.clickFrames) this.clickPhase = -1;
+    return sample;
   }
 }
 

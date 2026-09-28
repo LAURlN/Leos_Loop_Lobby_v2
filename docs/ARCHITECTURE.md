@@ -87,6 +87,14 @@ per peer, using the relay for signaling (a new channel number), and a
 Because the CRDT tolerates duplicates and any delivery order, no other code
 needs to change.
 
+## Full song view
+
+The "Song" tab (`ui/components/SongView.svelte`) shows all sections in order
+on a timeline and plays them back to back. `session/song.ts` decides the
+arrangement (each section as long as its longest loop, silent ones skipped);
+`AudioSync` has a song mode that gives each section's tracks a play window in
+the worklet, so section changes are sample-accurate. See ADR 0007.
+
 ## Performance notes
 
 - Discs (`ui/discRenderer.ts`): the spectrogram ring is painted once per mix

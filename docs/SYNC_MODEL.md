@@ -59,6 +59,13 @@ Consequences:
   Any value is valid (see above).
 - When no track has a length anymore, the origin is cleared.
 
+## Song playback
+
+The full song view (ADR 0007) plays every section once, in order. It is local
+like everything else here: no shared playhead. Each section's tracks get their
+own origin at the section start plus a play window, so within a section all
+tracks still share one origin and stay aligned exactly as recorded.
+
 ## Sample rates
 
 Stored audio is always 48 kHz mono. The track player worklet reads the

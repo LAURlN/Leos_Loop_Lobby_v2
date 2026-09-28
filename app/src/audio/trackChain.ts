@@ -9,6 +9,12 @@ import type { EffectInstance } from '../effects/types';
 import type { EffectState } from '../session/schema';
 import { PROCESSOR, type TrackPlayerMessage } from './messages';
 
+/** Local frames [start, end) in which a track sounds (song playback). */
+export interface PlayWindow {
+  start: number;
+  end: number;
+}
+
 interface LiveEffect {
   id: string;
   type: string;
@@ -23,6 +29,7 @@ export class TrackChain {
   private readonly panner: StereoPannerNode;
   private effects: LiveEffect[] = [];
   private structureKey = '';
+  private transportKey = '';
 
   constructor(
     private readonly ctx: AudioContext,
@@ -45,8 +52,11 @@ export class TrackChain {
     this.player.port.postMessage(msg, transfer);
   }
 
-  setTransport(origin: number | null): void {
-    this.post({ type: 'transport', origin });
+  setTransport(origin: number | null, window?: PlayWindow): void {
+    const key = `${origin}|${window?.start}|${window?.end}`;
+    if (key === this.transportKey) return;
+    this.transportKey = key;
+    this.post({ type: 'transport', origin, start: window?.start, end: window?.end });
   }
 
   /** Sends a new mixed loop. The array is transferred; do not reuse it. */

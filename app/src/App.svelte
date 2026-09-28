@@ -9,6 +9,7 @@
   import RoomDialog from './ui/components/RoomDialog.svelte';
   import SectionTabs from './ui/components/SectionTabs.svelte';
   import SettingsDialog from './ui/components/SettingsDialog.svelte';
+  import SongView from './ui/components/SongView.svelte';
   import TrackCard from './ui/components/TrackCard.svelte';
   import TrackPanel from './ui/components/TrackPanel.svelte';
   import { lobby } from './state/lobby.svelte';
@@ -71,6 +72,13 @@
     if (!lobby.started || dialog || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement;
     if (target.closest('input, select, textarea, button')) return;
+    if (lobby.songView) {
+      if (event.key === ' ') {
+        event.preventDefault();
+        lobby.togglePlayback();
+      }
+      return;
+    }
     const n = Number(event.key);
     if (n >= 1 && n <= 9) {
       const track = lobby.activeTracks[n - 1];
@@ -121,19 +129,19 @@
           <button
             type="button"
             class="transport-btn restart"
-            title="Restart playback of current section"
-            aria-label="Restart playback"
+            title={lobby.songView ? 'Play the song from the start' : 'Restart playback of current section'}
+            aria-label={lobby.songView ? 'Play from start' : 'Restart playback'}
             disabled={!lobby.canPlayback}
             onclick={() => lobby.restartPlayback()}
           >
             <span class="t-icon">⏮</span>
-            <span class="t-label">Restart</span>
+            <span class="t-label">{lobby.songView ? 'Start' : 'Restart'}</span>
           </button>
           <button
             type="button"
             class="transport-btn pause"
             class:active={lobby.playbackPaused}
-            title="Pause playback of current section"
+            title={lobby.songView ? 'Pause the song' : 'Pause playback of current section'}
             aria-label="Pause playback"
             disabled={!lobby.canPlayback || lobby.playbackPaused}
             onclick={() => lobby.pausePlayback()}
@@ -145,13 +153,13 @@
             type="button"
             class="transport-btn resume"
             class:highlight={lobby.playbackPaused && lobby.canPlayback}
-            title="Resume playback of current section"
-            aria-label="Resume playback"
+            title={lobby.songView ? 'Play the song' : 'Resume playback of current section'}
+            aria-label={lobby.songView ? 'Play song' : 'Resume playback'}
             disabled={!lobby.canPlayback || !lobby.playbackPaused}
             onclick={() => lobby.resumePlayback()}
           >
             <span class="t-icon">▶</span>
-            <span class="t-label">Resume</span>
+            <span class="t-label">{lobby.songView ? 'Play' : 'Resume'}</span>
           </button>
         </div>
       </div>
@@ -165,6 +173,11 @@
       </button>
     {/if}
 
+    {#if lobby.songView}
+      <main class="content">
+        <SongView />
+      </main>
+    {:else}
     <main class="content">
       <section class="grid" aria-label="Tracks">
         {#each lobby.activeTracks as track (track.id)}
@@ -188,9 +201,10 @@
         </aside>
       {/if}
     </main>
+    {/if}
   </div>
 
-  {#if !wide && sheetOpen && selected}
+  {#if !wide && sheetOpen && selected && !lobby.songView}
     <div class="sheet-backdrop" role="presentation" onclick={() => (sheetOpen = false)}></div>
     <aside class="sheet" aria-label="Track settings">
       <div class="grabber"></div>

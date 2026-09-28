@@ -10,8 +10,8 @@
  */
 import processorsUrl from './worklet/processors.ts?worker&url';
 import { MicCapture } from './micCapture';
-import { PROCESSOR, type MetronomeMessage, type RecorderChunk } from './messages';
-import { TrackChain } from './trackChain';
+import { PROCESSOR, type MetronomeMessage, type MetronomeSegment, type RecorderChunk } from './messages';
+import { TrackChain, type PlayWindow } from './trackChain';
 
 export interface MetronomeConfig {
   enabled: boolean;
@@ -95,6 +95,19 @@ export class AudioEngine {
     this.origin = origin;
     for (const chain of this.chains.values()) chain.setTransport(origin);
     this.metronome.port.postMessage({ type: 'transport', origin } satisfies MetronomeMessage);
+  }
+
+  /**
+   * Song playback: one track gets its own origin and play window instead of
+   * the shared transport. `setTransportOrigin` puts every track back on it.
+   */
+  setTrackTransport(id: string, origin: number | null, window?: PlayWindow): void {
+    this.chains.get(id)?.setTransport(origin, window);
+  }
+
+  /** Song playback: the click follows each section's loop (null = normal transport). */
+  setMetronomeSegments(segments: MetronomeSegment[] | null): void {
+    this.metronome.port.postMessage({ type: 'segments', segments } satisfies MetronomeMessage);
   }
 
   /** Frame the audio graph is about to render. */
