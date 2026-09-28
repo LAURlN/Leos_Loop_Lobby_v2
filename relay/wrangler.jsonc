@@ -1,0 +1,18 @@
+{
+  // Cloudflare Worker: the room relay (one Durable Object per room).
+  // The app itself is hosted on GitHub Pages; see README.md "Deploy".
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "leos-loop-lobby-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  // The free plan only supports SQLite-backed Durable Objects (we store nothing anyway).
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "vars": {
+    // Comma-separated list of web origins allowed to open rooms, e.g.
+    // "https://laurin.github.io,http://localhost:5173". Empty = allow all.
+    "ALLOWED_ORIGINS": ""
+  }
+}

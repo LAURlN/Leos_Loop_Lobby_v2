@@ -1,0 +1,23 @@
+{
+  "name": "leos-loop-lobby",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "app",
+    "relay"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w app",
+    "dev:relay": "npm run dev -w relay",
+    "build": "npm run build -w app",
+    "check": "npm run check -w app && npm run check -w relay && npm run check -w shared",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.2"
+  }
+}
