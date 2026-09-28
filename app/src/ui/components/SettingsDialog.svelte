@@ -1,5 +1,5 @@
 <!--
-  Latency calibration, audio devices, metronome and session reset.
+  Latency calibration, audio devices, metronome, project export/import and session reset.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -13,6 +13,11 @@
   let result = $state<{ ok: boolean; message: string } | null>(null);
   let inputs = $state<MediaDeviceInfo[]>([]);
   let confirmClear = $state(false);
+  let exporting = $state(false);
+  let importing = $state(false);
+  /** Project file picked for import, waiting for replace/append. */
+  let pendingImport = $state<File | null>(null);
+  let fileInput = $state<HTMLInputElement>();
 
   const latency = $derived(lobby.latency);
   const sourceText = $derived(
@@ -26,6 +31,28 @@
   onMount(async () => {
     inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
   });
+
+  async function exportProject() {
+    exporting = true;
+    await lobby.exportProject();
+    exporting = false;
+  }
+
+  function pickFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    pendingImport = input.files?.[0] ?? null;
+    input.value = '';
+  }
+
+  async function importProject(mode: 'replace' | 'append') {
+    const file = pendingImport;
+    if (!file) return;
+    importing = true;
+    const ok = await lobby.importProject(file, mode);
+    importing = false;
+    pendingImport = null;
+    if (ok) onclose();
+  }
 
   async function calibrate() {
     result = null;
@@ -122,6 +149,29 @@
         format={(v) => `${Math.round(v * 100)}%`}
         onchange={(v) => lobby.updateSettings({ metronomeVolume: v })}
       />
+    </section>
+
+    <section class="stack">
+      <h3 class="label">Project</h3>
+      <p class="muted small">
+        Save everything — all sections, loops, takes and effects — to a file, or load one. Files stay compatible with
+        future versions of the app.
+      </p>
+      <button onclick={exportProject} disabled={exporting}>{exporting ? 'Exporting…' : 'Export project'}</button>
+      <!-- No `accept` filter: iOS greys out files with unknown extensions like .lll. -->
+      <input bind:this={fileInput} type="file" hidden onchange={pickFile} />
+      {#if pendingImport}
+        <p class="small">Import <strong>{pendingImport.name}</strong>:</p>
+        <button class="primary" onclick={() => importProject('append')} disabled={importing}>
+          Add as new sections
+        </button>
+        <button class="danger" onclick={() => importProject('replace')} disabled={importing}>
+          Replace current project{lobby.room ? ' for everyone' : ''}
+        </button>
+        <button onclick={() => (pendingImport = null)} disabled={importing}>Cancel</button>
+      {:else}
+        <button onclick={() => fileInput?.click()}>Import project…</button>
+      {/if}
     </section>
 
     <section class="stack">

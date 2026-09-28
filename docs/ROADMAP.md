@@ -17,13 +17,15 @@ Status as of the first v2 milestone. Items carried over from v1's
 - Listen-only mode without microphone; `?testmic` synthetic input
 - One responsive UI for phone and desktop; keyboard shortcuts on desktop
 - Song sections: tab bar with reordering, renaming, peer presence and isolated loop copying
+- Project export/import (`.lll` files, forward/backward compatible, ADR 0006)
 - GitHub Pages deployment workflow
 
 ## Next
 
 1. **WebRTC P2P transport** with relay fallback (see ARCHITECTURE.md).
-2. **Save / load sessions locally** (IndexedDB) and **export** as WAV (per track
-   and mixdown) (v1: save projects, mp3 export). Opus/MP3 via WebCodecs later.
+2. **Autosave sessions locally** (IndexedDB, can reuse the project file format)
+   and **export** as WAV (per track and mixdown) (v1: mp3 export). Opus/MP3 via
+   WebCodecs later.
 3. **Beat-match refinement** from v1: correlate the newest take's onsets with
    the rest of the track and offer to shift it (updates `layer.offset`) and to
    adjust the latency profile.

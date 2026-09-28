@@ -43,7 +43,7 @@
 |---|---|---|
 | `audio/` | AudioContext, worklets, mic capture, track chains, calibration | Knows nothing about sessions or the network. |
 | `effects/` | Declarative effect definitions + registry | One file per effect. UI and sync derive from it. |
-| `session/` | Yjs schema, actions, the looper state machine, audio sync, layer audio store & codec | Only `actions.ts` writes the doc. |
+| `session/` | Yjs schema, actions, the looper state machine, audio sync, layer audio store & codec, project files | Only `actions.ts` writes the doc. |
 | `net/` | Transport interface, relay transport, room session, blob exchange | Speaks only through `Transport`. |
 | `state/` | App controller (`Lobby`) with Svelte runes, device settings | The only bridge between UI and everything else. |
 | `ui/` | Components, canvas disc renderer, spectrogram, palette | No Yjs, no AudioEngine imports. |
@@ -86,6 +86,13 @@ per peer, using the relay for signaling (a new channel number), and a
 `CompositeTransport` that prefers P2P per peer and falls back to the relay.
 Because the CRDT tolerates duplicates and any delivery order, no other code
 needs to change.
+
+## Project files
+
+Settings -> Project exports the whole session as a `.lll` file (zip with a JSON
+dump of the doc plus layer audio) and imports it, replacing the session or
+adding its sections. Format and compatibility rules: `session/projectFile.ts`
+and ADR 0006.
 
 ## Testing
 

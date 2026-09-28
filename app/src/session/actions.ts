@@ -7,7 +7,16 @@ import * as Y from 'yjs';
 import { clampLength, predefinedLength, randomId, type LengthSpec } from '@lll/shared';
 import { clampParam, defaultParams, getEffect, normalizeParams } from '../effects/registry';
 import type { LayerAudioStore } from './layerAudio';
-import { DEFAULT_BEATS_PER_LOOP, SCHEMA_VERSION, readLayer, roots, type YLayer, type YSection, type YTrack } from './schema';
+import {
+  DEFAULT_BEATS_PER_LOOP,
+  SCHEMA_VERSION,
+  readLayer,
+  readLengthSpec,
+  roots,
+  type YLayer,
+  type YSection,
+  type YTrack,
+} from './schema';
 
 /** Transaction origin for local edits (the network layer forwards these). */
 export const LOCAL = 'local';
@@ -444,6 +453,174 @@ export function clearSession(doc: Y.Doc, createdBy: string): void {
     const firstSectionId = createSection(doc, { name: '1', createdBy });
     createTrack(doc, { lengthSpec: { kind: 'free', autoSnap: true }, createdBy, sectionId: firstSectionId });
   }, LOCAL);
+}
+
+// ---------------------------------------------------------------------------
+// Project import
+// ---------------------------------------------------------------------------
+
+const SECTION_FIELDS = new Set(['name', 'order', 'referenceLength48', 'beatsPerLoop', 'createdBy']);
+const TRACK_FIELDS = new Set([
+  'sectionId', 'name', 'color', 'order', 'lengthSpec', 'length48', 'volume', 'pan', 'mute', 'solo', 'createdBy', 'effects',
+]);
+const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden']);
+const EFFECT_FIELDS = new Set(['type', 'enabled', 'order', 'params']);
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const finite = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+const text = (v: unknown, fallback: string, max = 40) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : fallback);
+const lengthOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? clampLength(v) : null);
+
+/** Keeps fields a newer version wrote, so re-exporting does not lose them. */
+function copyUnknownFields(target: Y.Map<unknown>, source: Record<string, unknown>, known: Set<string>): void {
+  for (const [k, v] of Object.entries(source)) {
+    if (known.has(k) || v === undefined) continue;
+    const json = JSON.stringify(v);
+    if (json !== undefined) target.set(k, JSON.parse(json) as unknown);
+  }
+}
+
+function importEffects(raw: unknown): Y.Map<Y.Map<unknown>> {
+  const effects = new Y.Map<Y.Map<unknown>>();
+  if (!isRecord(raw)) return effects;
+  for (const [id, e] of Object.entries(raw)) {
+    if (!isRecord(e) || typeof e.type !== 'string' || !e.type) continue;
+    const def = getEffect(e.type);
+    const y = new Y.Map<unknown>();
+    copyUnknownFields(y, e, EFFECT_FIELDS);
+    y.set('type', e.type);
+    y.set('enabled', typeof e.enabled === 'boolean' ? e.enabled : true);
+    y.set('order', finite(e.order, 0));
+    // Unknown effect types and params stay untouched; a newer version knows them.
+    const values: Record<string, number> = def ? defaultParams(def) : {};
+    for (const [k, v] of Object.entries(isRecord(e.params) ? e.params : {})) {
+      if (typeof v === 'number' && Number.isFinite(v)) values[k] = def ? (clampParam(def, k, v) ?? v) : v;
+    }
+    const params = new Y.Map<number>();
+    for (const [k, v] of Object.entries(values)) params.set(k, v);
+    y.set('params', params);
+    effects.set(id, y);
+  }
+  return effects;
+}
+
+export interface ImportedProject {
+  meta: Record<string, unknown>;
+  sections: Record<string, Record<string, unknown>>;
+  tracks: Record<string, Record<string, unknown>>;
+  layers: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Writes an imported project (session/projectFile.ts) into the session.
+ * The ids must be fresh (`withFreshIds`) and the layer audio already in the
+ * store. `replace` swaps out the whole session (for everyone in a room);
+ * `append` adds the project's sections after the existing ones.
+ * Returns the ids of the imported sections in order.
+ */
+export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'replace' | 'append'): string[] {
+  const sectionOrder: string[] = [];
+  doc.transact(() => {
+    const { meta, tracks, layers, sections } = roots(doc);
+    if (mode === 'replace') {
+      for (const id of [...layers.keys()]) layers.delete(id);
+      for (const id of [...tracks.keys()]) tracks.delete(id);
+      for (const id of [...sections.keys()]) sections.delete(id);
+      meta.delete('referenceLength48');
+      const beats = finite(project.meta.beatsPerLoop, DEFAULT_BEATS_PER_LOOP);
+      meta.set('beatsPerLoop', clamp(Math.round(beats), 1, 64));
+    }
+    meta.set('schema', SCHEMA_VERSION);
+    let nextOrder = 0;
+    for (const s of sections.values()) nextOrder = Math.max(nextOrder, finite(s.get('order'), 0) + 1);
+
+    // Sections, in their saved order. A project without sections (older
+    // format) gets one, like readSnapshot's fallback.
+    const sourceSections = Object.entries(project.sections).sort(
+      ([a, x], [b, y]) => finite(x.order, 0) - finite(y.order, 0) || a.localeCompare(b),
+    );
+    if (sourceSections.length === 0) {
+      sourceSections.push([
+        randomId(),
+        {
+          name: '1',
+          referenceLength48: project.meta.referenceLength48,
+          beatsPerLoop: project.meta.beatsPerLoop,
+        },
+      ]);
+    }
+    for (const [id, s] of sourceSections) {
+      const y: YSection = new Y.Map();
+      copyUnknownFields(y, s, SECTION_FIELDS);
+      y.set('name', text(s.name, String(sectionOrder.length + 1)));
+      y.set('order', nextOrder++);
+      const ref = lengthOrNull(s.referenceLength48);
+      if (ref !== null) y.set('referenceLength48', ref);
+      y.set('beatsPerLoop', clamp(Math.round(finite(s.beatsPerLoop, DEFAULT_BEATS_PER_LOOP)), 1, 64));
+      y.set('createdBy', typeof s.createdBy === 'string' ? s.createdBy : '');
+      sections.set(id, y);
+      sectionOrder.push(id);
+    }
+    const sectionIds = new Set(sectionOrder);
+
+    for (const [id, t] of Object.entries(project.tracks)) {
+      const y: YTrack = new Y.Map();
+      copyUnknownFields(y, t, TRACK_FIELDS);
+      const sectionId = typeof t.sectionId === 'string' && sectionIds.has(t.sectionId) ? t.sectionId : sectionOrder[0]!;
+      y.set('sectionId', sectionId);
+      y.set('name', text(t.name, 'Track'));
+      y.set('color', Math.round(finite(t.color, 0)));
+      y.set('order', finite(t.order, 0));
+      y.set('lengthSpec', readLengthSpec(t.lengthSpec));
+      y.set('length48', lengthOrNull(t.length48));
+      y.set('volume', clamp(finite(t.volume, 1), 0, 2));
+      y.set('pan', clamp(finite(t.pan, 0), -1, 1));
+      y.set('mute', t.mute === true);
+      y.set('solo', t.solo === true);
+      y.set('createdBy', typeof t.createdBy === 'string' ? t.createdBy : '');
+      y.set('effects', importEffects(t.effects));
+      tracks.set(id, y);
+    }
+
+    for (const [id, l] of Object.entries(project.layers)) {
+      const trackId = typeof l.trackId === 'string' ? l.trackId : '';
+      const frames = Math.round(finite(l.frames, 0));
+      if (!tracks.has(trackId) || frames <= 0) continue;
+      const y: YLayer = new Y.Map();
+      copyUnknownFields(y, l, LAYER_FIELDS);
+      y.set('trackId', trackId);
+      y.set('author', typeof l.author === 'string' ? l.author : '');
+      y.set('authorName', text(l.authorName, 'Player'));
+      y.set('seq', Math.round(finite(l.seq, 0)));
+      y.set('offset', Math.round(finite(l.offset, 0)));
+      y.set('frames', frames);
+      y.set('gain', clamp(finite(l.gain, 1), 0, 4));
+      y.set('hidden', l.hidden === true);
+      layers.set(id, y);
+    }
+
+    // A track with audio but no length cannot play; give it its longest layer's length.
+    for (const [trackId, t] of tracks.entries()) {
+      if (typeof t.get('length48') === 'number') continue;
+      let longest = 0;
+      for (const l of layers.values()) if (l.get('trackId') === trackId) longest = Math.max(longest, Number(l.get('frames')));
+      if (longest > 0) t.set('length48', clampLength(longest));
+    }
+    for (const sectionId of sectionOrder) {
+      const sec = sections.get(sectionId);
+      if (!sec || typeof sec.get('referenceLength48') === 'number') continue;
+      const first = [...tracks.values()].find(
+        (t) => t.get('sectionId') === sectionId && typeof t.get('length48') === 'number',
+      );
+      if (first) sec.set('referenceLength48', first.get('length48'));
+    }
+    if (typeof meta.get('referenceLength48') !== 'number') {
+      const ref = lengthOrNull(project.meta.referenceLength48) ?? sections.get(sectionOrder[0]!)?.get('referenceLength48');
+      if (typeof ref === 'number') meta.set('referenceLength48', ref);
+    }
+    resetReferenceIfUnused(doc);
+  }, LOCAL);
+  return sectionOrder;
 }
 
 /** Once no track in a section or in the session has a length anymore, reset reference. */

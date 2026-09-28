@@ -38,6 +38,8 @@ Browser testing without a mic: open `/?testmic`. Two tabs = two players.
   the AudioEngine.** Go through `state/lobby.svelte.ts`.
 - **The worklet imports only `@lll/shared/timing`** (no DOM/TextEncoder there).
 - **The relay stays dumb and stateless**: no payload parsing, no storage.
+- **Project files stay readable forever** (ADR 0006): old files must keep
+  importing; newer files import with unknown parts ignored.
 - **Protocols are forward compatible**: unknown channels/effects/fields are
   ignored, never fatal. Never rename stored ids (`type`, param `id`, map keys).
 
@@ -58,6 +60,13 @@ it in the UI. Old clients ignore unknown fields.
 ### Add a network message type
 Add a channel constant in `net/roomSession.ts` and handle it in `receive`.
 Never reuse a channel number. Keep messages small (<60 kB) for WebRTC later.
+
+### Change the project file format
+Read ADR 0006 first. Bump `PROJECT_FORMAT_VERSION` in
+`session/projectFile.ts`, add a new frozen fixture test (never edit the old
+ones), and bump `minReaderVersion` only if older apps would misread the file.
+New shared fields need nothing: they are exported and preserved automatically;
+validate them in `actions.importProject`.
 
 ### Add a transport (e.g. WebRTC)
 Implement `Transport` from `net/transport.ts`; see ARCHITECTURE.md "Planned".

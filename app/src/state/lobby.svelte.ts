@@ -16,6 +16,14 @@ import * as actions from '../session/actions';
 import { AudioSync, type TrackVisual } from '../session/audioSync';
 import { LayerAudioStore } from '../session/layerAudio';
 import { Looper, type LocalRecording } from '../session/looper';
+import {
+  ProjectFileError,
+  exportProject,
+  loadProjectAudio,
+  parseProject,
+  projectFileName,
+  withFreshIds,
+} from '../session/projectFile';
 import { hasAudio, readSnapshot, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
 import { displayName, loadSettings, saveSettings, tabUserId, type Settings } from './settings';
 
@@ -354,6 +362,56 @@ export class Lobby {
     this.looper?.cancel();
     actions.clearSession(this.doc, this.userId);
     this.activeSectionId = this.snapshot.sections[0]?.id ?? null;
+  }
+
+  // ---- project files ----------------------------------------------------------------
+
+  /** Downloads the whole session (all sections, tracks and audio) as a project file. */
+  async exportProject(): Promise<void> {
+    try {
+      const { bytes, missingAudio } = await exportProject(this.doc, this.store);
+      const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = projectFileName();
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (missingAudio > 0) {
+        this.notify(`Exported. ${missingAudio} take${missingAudio === 1 ? ' was' : 's were'} left out: audio still loading.`);
+      }
+    } catch (err) {
+      this.notify(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Imports a project file. `replace` swaps out the session (for everyone in
+   * a room); `append` adds its sections after the current ones.
+   */
+  async importProject(file: Blob, mode: 'replace' | 'append'): Promise<boolean> {
+    try {
+      const data = withFreshIds(parseProject(new Uint8Array(await file.arrayBuffer())));
+      const { content, droppedLayers } = await loadProjectAudio(data, this.store);
+      this.looper?.cancel();
+      const sections = actions.importProject(this.doc, content, mode);
+      this.refreshSnapshot();
+      const first = sections[0];
+      if (first) this.selectSection(first);
+      this.selectedTrackId = this.activeTracks[0]?.id ?? null;
+      this.notify(
+        droppedLayers > 0
+          ? `Project imported. ${droppedLayers} take${droppedLayers === 1 ? '' : 's'} could not be read.`
+          : 'Project imported.',
+      );
+      return true;
+    } catch (err) {
+      this.notify(
+        err instanceof ProjectFileError
+          ? err.message
+          : `Import failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
   }
 
   undo(trackId: string): void {

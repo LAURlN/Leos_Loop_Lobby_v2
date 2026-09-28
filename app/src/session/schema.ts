@@ -94,7 +94,7 @@ const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.i
 const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
 const bool = (v: unknown, fallback = false) => (typeof v === 'boolean' ? v : fallback);
 
-function readLengthSpec(v: unknown): LengthSpec {
+export function readLengthSpec(v: unknown): LengthSpec {
   const o = v as Partial<LengthSpec> | undefined;
   if (o?.kind === 'ratio' && typeof o.num === 'number' && typeof o.den === 'number') {
     return { kind: 'ratio', num: o.num, den: o.den };
