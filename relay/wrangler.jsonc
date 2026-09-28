@@ -13,6 +13,6 @@
   "vars": {
     // Comma-separated list of web origins allowed to open rooms, e.g.
     // "https://laurin.github.io,http://localhost:5173". Empty = allow all.
-    "ALLOWED_ORIGINS": ""
+    "ALLOWED_ORIGINS": "https://laurln.github.io"
   }
 }
