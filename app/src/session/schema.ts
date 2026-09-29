@@ -67,8 +67,6 @@ export interface TrackState {
   createdBy: string;
   /** Set for metronome tracks: the loop is this click pattern, not takes (session/click.ts). */
   click: ClickPattern | null;
-  /** A section slice of a continuous song take; no extra play-window fades. */
-  songTake?: boolean;
   effects: EffectState[];
   /** All layers of this track including hidden ones, oldest first. */
   layers: LayerState[];
@@ -199,7 +197,6 @@ export function readSnapshot(doc: Y.Doc): SessionSnapshot {
       solo: bool(t.get('solo')),
       createdBy: str(t.get('createdBy')),
       click: readClick(t.get('click')),
-      songTake: t.get('songTake') === true,
       effects: readEffects(t.get('effects')),
       layers: (layersByTrack.get(id) ?? []).sort((a, b) => a.seq - b.seq || a.author.localeCompare(b.author)),
     });

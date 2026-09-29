@@ -292,42 +292,6 @@ export interface NewLayer {
   length48: number;
 }
 
-export interface SongTakePart {
-  id: string;
-  sectionId: string;
-  length48: number;
-  offset: number;
-  frames: number;
-}
-
-/** Commit all section slices atomically, without changing any existing loops. */
-export function addSongTake(doc: Y.Doc, parts: SongTakePart[], author: string, authorName: string): string[] {
-  const { sections, tracks, layers } = roots(doc);
-  if (parts.length === 0 || new Set(parts.map((p) => p.id)).size !== parts.length || parts.some((p) =>
-    !sections.has(p.sectionId) || layers.has(p.id) || !p.id ||
-    !Number.isSafeInteger(p.length48) || clampLength(p.length48) !== p.length48 ||
-    !Number.isSafeInteger(p.offset) || p.offset < 0 ||
-    !Number.isSafeInteger(p.frames) || p.frames <= 0 || p.offset + p.frames > p.length48
-  )) return [];
-  const ids: string[] = [];
-  doc.transact(() => {
-    for (const part of parts) {
-      const id = createTrack(doc, {
-        sectionId: part.sectionId, createdBy: author,
-        name: `Song take · ${authorName}`.slice(0, 40), lengthSpec: secondsSpec(part.length48),
-      });
-      tracks.get(id)!.set('songTake', true);
-      // A soloed backing track should not hide the new recording on playback.
-      if ([...tracks.values()].some((t) => t.get('sectionId') === part.sectionId && t.get('solo') === true)) {
-        tracks.get(id)!.set('solo', true);
-      }
-      addLayer(doc, { ...part, trackId: id, author, authorName });
-      ids.push(id);
-    }
-  }, LOCAL);
-  return ids;
-}
-
 /**
  * Commits a recorded take. Sets the track length (first take), the section
  * reference length and the session reference length if they are still unset.
@@ -477,7 +441,6 @@ export function copyTrackToSection(
     newTrack.set('createdBy', createdBy);
     const click = readClick(srcTrack.get('click'));
     if (click) newTrack.set('click', click);
-    if (srcTrack.get('songTake') === true) newTrack.set('songTake', true);
 
     if (typeof length48 === 'number' && typeof targetSection.get('referenceLength48') !== 'number') {
       targetSection.set('referenceLength48', length48);
@@ -572,7 +535,7 @@ export function clearSession(doc: Y.Doc, createdBy: string): void {
 const SECTION_FIELDS = new Set(['name', 'order', 'referenceLength48', 'beatsPerLoop', 'createdBy']);
 const TRACK_FIELDS = new Set([
   'sectionId', 'name', 'color', 'order', 'lengthSpec', 'length48', 'volume', 'pan', 'mute', 'solo', 'createdBy', 'effects',
-  'click', 'songTake',
+  'click',
 ]);
 const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden', 'length48']);
 const EFFECT_FIELDS = new Set(['type', 'enabled', 'order', 'params']);
@@ -690,7 +653,6 @@ export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'repla
       y.set('solo', t.solo === true);
       y.set('createdBy', typeof t.createdBy === 'string' ? t.createdBy : '');
       y.set('effects', importEffects(t.effects));
-      if (t.songTake === true) y.set('songTake', true);
       const click = readClick(t.click);
       if (click) {
         y.set('click', click);
@@ -827,3 +789,4 @@ export function applyEffectPreset(doc: Y.Doc, trackId: string, effectId: string,
   const preset = def?.presets?.find((p) => p.name === presetName);
   if (def && preset) setEffectParams(doc, trackId, effectId, normalizeParams(def, preset.values));
 }
+

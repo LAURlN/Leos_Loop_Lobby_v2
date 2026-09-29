@@ -72,20 +72,7 @@
     <span class="muted">
       {plan.segments.length} section{plan.segments.length === 1 ? '' : 's'} · {clock(totalSec)}
     </span>
-    <button
-      class="record" class:recording={lobby.songRecording}
-      disabled={!lobby.canPlayback || lobby.songFinishing || lobby.finishing.length > 0 || lobby.calibrating || !!lobby.micError}
-      aria-pressed={lobby.songRecording}
-      onclick={(event) => lobby.toggleSongRecording(event.timeStamp)}
-    >{lobby.songFinishing ? 'Saving take…' : lobby.songRecording ? 'Stop recording' : 'Record'}</button>
   </header>
-  <p class="muted small" aria-live="polite">
-    {lobby.songRecording
-      ? 'Recording… Stops at the end of the song. Stop recording or pause to finish early.'
-      : lobby.songFinishing
-        ? 'Splitting your take into section loops…'
-        : 'Record from the playhead. Each section gets a new loop, keeping your performance in place.'}
-  </p>
 
   <div class="scroller" bind:this={scroller} bind:clientWidth={viewWidth}>
     {#if plan.segments.length === 0}
@@ -152,12 +139,9 @@
   }
   .summary {
     display: flex;
-    flex-wrap: wrap;
     align-items: baseline;
     gap: 12px;
   }
-  .record { margin-left: auto; border-color: var(--danger); }
-  .recording { background: var(--danger); color: white; }
   .summary h2 {
     font-size: 16px;
     margin: 0;

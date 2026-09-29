@@ -66,12 +66,6 @@ like everything else here: no shared playhead. Each section's tracks get their
 own origin at the section start plus a play window, so within a section all
 tracks still share one origin and stay aligned exactly as recorded.
 
-Recording in this view uses that same local song origin and the device's own
-round trip. The take is resampled once and sliced at canonical section
-boundaries, then stored as ordinary section-length loops with section-relative
-offsets. Only the entire take's outer edges are faded. No song origin or capture
-time is stored or sent to peers (ADR 0009).
-
 ## Sample rates
 
 Stored audio is always 48 kHz mono. The track player worklet reads the

@@ -17,12 +17,6 @@ device keeps its own clock; loops still line up (see
 Desktop shortcuts: `1`–`9` tap a track, `Space` taps the selected track,
 `Z` undoes your last take on it.
 
-In **Song**, use **Record** (or `R`) to play and record from the playhead.
-Your take becomes a new loop in each section it crosses, preserving the
-performance across section boundaries. **Stop recording** or **Pause** saves
-early; otherwise it stops at the song end (up to ten minutes per take).
-Open a section to mix or undo its recorded loop as usual.
-
 ## Development
 
 Requirements: Node.js 22+.

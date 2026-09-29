@@ -76,9 +76,6 @@
       if (event.key === ' ') {
         event.preventDefault();
         lobby.togglePlayback();
-      } else if (event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        lobby.toggleSongRecording(event.timeStamp);
       }
       return;
     }
@@ -134,7 +131,7 @@
             class="transport-btn restart"
             title={lobby.songView ? 'Play the song from the start' : 'Restart playback of current section'}
             aria-label={lobby.songView ? 'Play from start' : 'Restart playback'}
-            disabled={!lobby.canPlayback || lobby.songRecording || lobby.songFinishing}
+            disabled={!lobby.canPlayback}
             onclick={() => lobby.restartPlayback()}
           >
             <span class="t-icon">⏮</span>

@@ -13,7 +13,6 @@ import { PROCESSOR, type TrackPlayerMessage } from './messages';
 export interface PlayWindow {
   start: number;
   end: number;
-  fadeEdges?: boolean;
 }
 
 interface LiveEffect {
@@ -54,10 +53,10 @@ export class TrackChain {
   }
 
   setTransport(origin: number | null, window?: PlayWindow): void {
-    const key = `${origin}|${window?.start}|${window?.end}|${window?.fadeEdges}`;
+    const key = `${origin}|${window?.start}|${window?.end}`;
     if (key === this.transportKey) return;
     this.transportKey = key;
-    this.post({ type: 'transport', origin, start: window?.start, end: window?.end, fadeEdges: window?.fadeEdges });
+    this.post({ type: 'transport', origin, start: window?.start, end: window?.end });
   }
 
   /** Sends a new mixed loop. The array is transferred; do not reuse it. */

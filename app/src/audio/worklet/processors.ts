@@ -19,7 +19,6 @@ class TrackPlayerProcessor extends AudioWorkletProcessor {
   private origin: number | null = null;
   private start = -Infinity;
   private end = Infinity;
-  private fadeEdges = true;
   private readonly step = CANONICAL_RATE / sampleRate;
   private readonly fade = Math.max(1, Math.round(sampleRate * WINDOW_FADE_SECONDS));
 
@@ -32,7 +31,6 @@ class TrackPlayerProcessor extends AudioWorkletProcessor {
         this.origin = msg.origin;
         this.start = msg.start ?? -Infinity;
         this.end = msg.end ?? Infinity;
-        this.fadeEdges = msg.fadeEdges !== false;
       }
     };
   }
@@ -57,10 +55,7 @@ class TrackPlayerProcessor extends AudioWorkletProcessor {
       out[i] = a + (b - a) * frac;
       if (windowed) {
         const frame = currentFrame + i;
-        if (frame < this.start || frame >= this.end) out[i] = 0;
-        else if (this.fadeEdges) {
-          out[i]! *= Math.max(0, Math.min(1, (frame - this.start) / this.fade, (this.end - frame) / this.fade));
-        }
+        out[i]! *= Math.max(0, Math.min(1, (frame - this.start) / this.fade, (this.end - frame) / this.fade));
       }
       pos += this.step;
       if (pos >= length) pos -= length;

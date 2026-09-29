@@ -121,11 +121,6 @@ export class AudioSync {
     return this.song !== null && this.song.origin !== null;
   }
 
-  /** Local-only origin captured by song recording, never sent to peers. */
-  get songOrigin(): number | null {
-    return this.song?.origin ?? null;
-  }
-
   /** Switches to song playback, stopped at the start. */
   enterSong(): void {
     this.song = { origin: null, pausedAt48: 0 };
@@ -206,7 +201,7 @@ export class AudioSync {
       }
       const start = song.origin + segment.start48 * k;
       const end = start + segment.length48 * k;
-      for (const t of segment.tracks) this.engine.setTrackTransport(t.id, start, { start, end, fadeEdges: !t.songTake });
+      for (const t of segment.tracks) this.engine.setTrackTransport(t.id, start, { start, end });
       const section = snapshot.sections.find((s) => s.id === segment.sectionId);
       segments.push({
         start,
