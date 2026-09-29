@@ -20,6 +20,8 @@ export interface TransportMessage {
   origin: number | null;
   start?: number;
   end?: number;
+  /** False for slices of one continuous recording (already faded at its outer edges). */
+  fadeEdges?: boolean;
 }
 
 /** One stretch of the song for the metronome: its own origin and loop. */
