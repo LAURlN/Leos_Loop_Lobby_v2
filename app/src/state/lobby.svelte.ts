@@ -27,6 +27,7 @@ import {
 } from '../session/projectFile';
 import { hasAudio, readSnapshot, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
 import { songPlan as planSong, type SongPlan } from '../session/song';
+import { SongRecorder } from '../session/songRecording';
 import { displayName, loadSettings, saveSettings, tabUserId, type Settings } from './settings';
 
 export interface RoomState {
@@ -56,6 +57,8 @@ export class Lobby {
   activeSectionId = $state<string | null>(null);
   /** Full song view: all sections in order, played back to back (local only). */
   songView = $state(false);
+  songRecording = $state(false);
+  songFinishing = $state(false);
   /** In the song view: true while the song is stopped or paused. */
   playbackPaused = $state(false);
   latency = $state.raw<LatencyProfile | null>(null);
@@ -72,6 +75,7 @@ export class Lobby {
   private doc = new Y.Doc();
   private readonly store = new LayerAudioStore();
   private looper: Looper | null = null;
+  private songRecorder: SongRecorder | null = null;
   private audioSync: AudioSync | null = null;
   private roomSession: RoomSession | null = null;
   private unsubscribeDoc: (() => void) | null = null;
@@ -141,6 +145,17 @@ export class Lobby {
         this.finishing = [...(this.looper?.finishing ?? [])];
         this.publishPresence();
       });
+      this.songRecorder = new SongRecorder({
+        doc: () => this.doc, engine, store: this.store,
+        identity: () => ({ userId: this.userId, name: this.name }),
+        roundTripMs: () => this.latency?.roundTripMs ?? 0,
+        changed: () => {
+          this.songRecording = this.songRecorder?.recording ?? false;
+          this.songFinishing = this.songRecorder?.finishing ?? false;
+        },
+        notify: (message) => this.notify(message),
+        ended: () => this.pausePlayback(),
+      });
       this.applyLocalPlayback();
       this.audioSync.apply(this.snapshot, this.activeSectionId);
       this.started = true;
@@ -177,6 +192,7 @@ export class Lobby {
 
   private refreshSnapshot(): void {
     const snap = readSnapshot(this.doc);
+    this.songRecorder?.validate(planSong(snap));
     this.snapshot = snap;
     if (!this.activeSectionId || !snap.sections.some((s) => s.id === this.activeSectionId)) {
       this.activeSectionId = snap.sections[0]?.id ?? null;
@@ -196,6 +212,7 @@ export class Lobby {
   /** Replaces the whole session (joining a room starts from the room's state). */
   private replaceDoc(doc: Y.Doc): void {
     this.looper?.cancel();
+    this.songRecorder?.cancel();
     this.songView = false;
     this.audioSync?.reset();
     this.store.clear();
@@ -211,7 +228,7 @@ export class Lobby {
   // ---- looping ------------------------------------------------------------------
 
   tapTrack(trackId: string, eventTime?: number): void {
-    if (this.songView) return;
+    if (this.songView || this.songFinishing) return;
     this.selectedTrackId = trackId;
     // Nothing to record on a metronome track: its disc toggles the click instead.
     const track = this.snapshot.tracks.find((t) => t.id === trackId);
@@ -278,6 +295,7 @@ export class Lobby {
 
   pausePlayback(): void {
     if (this.playbackPaused) return;
+    if (this.songRecording) void this.songRecorder?.stop();
     if (this.songView) this.audioSync?.pauseSong();
     else this.audioSync?.pause();
     this.playbackPaused = true;
@@ -294,6 +312,7 @@ export class Lobby {
   }
 
   restartPlayback(): void {
+    if (this.songRecording || this.songFinishing) return;
     if (this.songView) {
       if (!this.canPlayback) return;
       this.audioSync?.playSong(0);
@@ -304,6 +323,29 @@ export class Lobby {
   }
 
   // ---- full song view -------------------------------------------------------------
+
+  /** Record a continuous pass from the playhead into new section-length loops. */
+  toggleSongRecording(eventTime?: number): void {
+    if (!this.songView || !this.songRecorder || !this.audioSync || !this.engine) return;
+    if (this.songRecording) {
+      void this.songRecorder.stop(eventTime);
+      this.pausePlayback();
+      return;
+    }
+    if (this.songFinishing || this.finishing.length > 0 || this.calibrating || !this.canPlayback) return;
+    if (this.micError) {
+      this.notify(`Can't record: ${this.micError}`);
+      return;
+    }
+    let start48 = this.songPosition48(eventTime);
+    if (start48 >= this.songPlan.total48) {
+      this.audioSync.seekSong(0);
+      start48 = 0;
+    }
+    if (this.playbackPaused) this.resumePlayback();
+    const origin = this.audioSync.songOrigin;
+    if (origin !== null) this.songRecorder.start(this.songPlan, origin, start48);
+  }
 
   /** Opens the song view (stopped at the start). Section looping stops meanwhile. */
   openSongView(): void {
@@ -318,6 +360,7 @@ export class Lobby {
   /** Back to the active section, which loops again from its start. */
   closeSongView(): void {
     if (!this.songView) return;
+    if (this.songRecording) void this.songRecorder?.stop();
     this.songView = false;
     this.playbackPaused = false;
     this.audioSync?.leaveSong(this.activeSectionId);
@@ -332,6 +375,7 @@ export class Lobby {
   }
 
   seekSong(pos48: number): void {
+    if (this.songRecording || this.songFinishing) return;
     this.audioSync?.seekSong(pos48);
   }
 
@@ -339,6 +383,7 @@ export class Lobby {
   tickSong(at: number): void {
     if (!this.songView || this.playbackPaused) return;
     if (this.songPosition48(at) >= this.songPlan.total48) {
+      if (this.songRecording) void this.songRecorder?.stop();
       this.audioSync?.pauseSong();
       this.audioSync?.seekSong(0);
       this.playbackPaused = true;
@@ -471,6 +516,7 @@ export class Lobby {
 
   clearSession(): void {
     this.looper?.cancel();
+    this.songRecorder?.cancel();
     actions.clearSession(this.doc, this.userId);
     this.activeSectionId = this.snapshot.sections[0]?.id ?? null;
   }
@@ -504,6 +550,7 @@ export class Lobby {
       const data = withFreshIds(parseProject(new Uint8Array(await file.arrayBuffer())));
       const { content, droppedLayers } = await loadProjectAudio(data, this.store);
       this.looper?.cancel();
+      this.songRecorder?.cancel();
       const sections = actions.importProject(this.doc, content, mode);
       this.refreshSnapshot();
       const first = sections[0];
@@ -593,6 +640,10 @@ export class Lobby {
   async openMic(): Promise<void> {
     const engine = this.engine;
     if (!engine) return;
+    if (this.songRecorder?.busy) {
+      this.songRecorder.cancel();
+      this.notify('Song recording cancelled because the microphone changed.');
+    }
     try {
       if (new URLSearchParams(location.search).has('testmic')) engine.useTestInput();
       else await engine.openMic(this.settings.inputDeviceId || undefined);
@@ -655,6 +706,7 @@ export class Lobby {
     const engine = this.engine;
     if (!engine || this.calibrating) return { ok: false, message: 'Audio is not running.' };
     this.looper?.cancel();
+    this.songRecorder?.cancel();
     this.calibrating = true;
     try {
       const wasMonitoring = this.settings.monitoring;
