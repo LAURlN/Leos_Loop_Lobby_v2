@@ -62,6 +62,11 @@
 5. In a room, `RoomSession` broadcasts the Yjs update. Peers see the layer,
    miss its audio, and `BlobExchange` fetches it (author first, then anyone).
 
+For the first longer free auto-snapped take, `session/phraseAlignment.ts`
+chooses phrase zero by whole common periods of the backing loops (ADR 0010).
+`Looper` moves the one local origin along with the take's capture mapping,
+preserving live alignment while avoiding reversed halves on song playback.
+
 ## Networking
 
 - **Relay protocol** (`shared/src/protocol.ts`): binary frames

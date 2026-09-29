@@ -27,7 +27,8 @@ import type { AudioEngine } from '../audio/engine';
 import type { CaptureHold } from '../audio/micCapture';
 import { addLayer } from './actions';
 import type { LayerAudioStore } from './layerAudio';
-import { readSnapshot } from './schema';
+import { phraseOriginShift } from './phraseAlignment';
+import { hasAudio, readSnapshot } from './schema';
 
 /** Audio kept from just before the tap, so an early note is not cut off. */
 const PRE_ROLL_SECONDS = 0.1;
@@ -45,7 +46,8 @@ export interface LocalRecording {
 
 export interface LooperDeps {
   doc: () => Y.Doc;
-  engine: AudioEngine;
+  engine: Pick<AudioEngine, 'sampleRate' | 'capture' | 'heardFrameAt' | 'transportOrigin' | 'setTransportOrigin'>;
+  activeSectionId: () => string | null;
   store: LayerAudioStore;
   identity: () => { userId: string; name: string };
   /** Current round-trip latency in milliseconds. */
@@ -155,13 +157,34 @@ export class Looper {
     const from = Math.floor(rec.startFrame + rt - preRoll);
     const to = Math.ceil(stopFrame + rt);
     await engine.capture.waitUntil(to);
+    if (doc !== this.deps.doc()) return;
+    const latest = readSnapshot(doc);
+    const currentTrack = latest.tracks.find((t) => t.id === track.id);
+    if (!currentTrack) return;
+    // A peer may have established the length while we waited for the mic tail.
+    length48 = currentTrack.length48 ?? length48;
+    let shift48 = 0;
+    if (currentTrack.length48 === null && track.lengthSpec.kind === 'free' && track.lengthSpec.autoSnap) {
+      const backing = latest.tracks.filter((t) => t.sectionId === track.sectionId && t.id !== track.id && hasAudio(t));
+      shift48 = phraseOriginShift(
+        convertFrames(rec.startFrame - origin, rate, CANONICAL_RATE),
+        length48,
+        backing.flatMap((t) => t.length48 === null ? [] : [t.length48]),
+      );
+    }
+    const phraseOrigin = origin + convertFrames(shift48, CANONICAL_RATE, rate);
     const samples = resampleLinear(engine.capture.read(from, to), rate, CANONICAL_RATE);
     applyFades(samples, Math.round(PRE_ROLL_SECONDS * CANONICAL_RATE), Math.round(FADE_OUT_SECONDS * CANONICAL_RATE));
 
-    const start = capturePosition(from, rt, origin, rate, length48);
+    const start = capturePosition(from, rt, phraseOrigin, rate, length48);
     const layer = foldTake(samples, start, length48);
     const id = randomId();
     store.put(id, layer.data);
+    // Move the ONE local origin with the take, so live playback is unchanged.
+    // Every backing length divides the shift; its sound and stored data stay put.
+    if (shift48 !== 0 && engine.transportOrigin === origin && this.deps.activeSectionId() === track.sectionId) {
+      engine.setTransportOrigin(phraseOrigin);
+    }
     const me = this.deps.identity();
     addLayer(doc, {
       id,

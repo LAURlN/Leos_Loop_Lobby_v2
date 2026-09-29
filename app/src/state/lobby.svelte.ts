@@ -134,6 +134,7 @@ export class Lobby {
       });
       this.looper = new Looper({
         doc: () => this.doc,
+        activeSectionId: () => this.songView ? null : this.activeSectionId,
         engine,
         store: this.store,
         identity: () => ({ userId: this.userId, name: this.name }),

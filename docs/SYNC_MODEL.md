@@ -59,6 +59,12 @@ Consequences:
   Any value is valid (see above).
 - When no track has a length anymore, the origin is cleared.
 
+A first longer auto-snapped take may rebase the local origin by a whole common
+period of every sounding backing loop (ADR 0010). Its capture mapping uses the
+same rebased origin. This picks which previously identical backing cycle is
+the first cycle of the longer phrase; all backing phases remain unchanged.
+Established longer phrases and overdubs never get independently rotated.
+
 ## Song playback
 
 The full song view (ADR 0007) plays every section once, in order. It is local
