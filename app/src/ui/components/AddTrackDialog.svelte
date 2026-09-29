@@ -1,9 +1,12 @@
 <!--
-  Pick how a new track decides its loop length (modes from v1).
+  Pick how a new track decides its loop length (modes from v1), or add a
+  metronome track with its own tempo and rhythm.
 -->
 <script lang="ts">
   import { parseLengthInput, type LengthSpec } from '@lll/shared';
+  import { describeClick, type ClickPattern } from '../../session/click';
   import { lobby } from '../../state/lobby.svelte';
+  import ClickEditor from './ClickEditor.svelte';
   import Modal from './Modal.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
@@ -11,6 +14,8 @@
   const hasReference = $derived(lobby.snapshot.referenceLength48 !== null);
   let custom = $state('');
   let error = $state('');
+  let metronome = $state(false);
+  let click = $state<ClickPattern>(lobby.suggestedClick);
 
   const ratios: Array<{ label: string; num: number; den: number }> = [
     { label: '¼×', num: 1, den: 4 },
@@ -37,6 +42,11 @@
       return;
     }
     add(spec);
+  }
+
+  function addMetronome() {
+    lobby.addClickTrack(click);
+    onclose();
   }
 </script>
 
@@ -69,6 +79,22 @@
       </div>
       {#if error}<p class="error">{error}</p>{/if}
     </form>
+
+    <div class="metronome">
+      <p class="label">Metronome</p>
+      {#if metronome}
+        <ClickEditor value={click} onchange={(patch) => (click = { ...click, ...patch })} />
+        <button class="primary" onclick={addMetronome}>Add metronome · {describeClick(click)}</button>
+        {#if !hasReference}
+          <p class="muted hint">Its bar becomes the first loop: free takes snap to whole bars.</p>
+        {/if}
+      {:else}
+        <button class="option" onclick={() => (metronome = true)}>
+          <strong>♩ Metronome track</strong>
+          <span>A click with your tempo and rhythm. Mix it, add effects, and hear it in the full song.</span>
+        </button>
+      {/if}
+    </div>
   </div>
 </Modal>
 
@@ -105,5 +131,13 @@
   }
   p.label {
     margin: 0 0 6px;
+  }
+  .metronome {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .metronome p.label {
+    margin: 0;
   }
 </style>

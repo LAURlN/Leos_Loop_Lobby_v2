@@ -95,6 +95,14 @@ arrangement (each section as long as its longest loop, silent ones skipped);
 `AudioSync` has a song mode that gives each section's tracks a play window in
 the worklet, so section changes are sample-accurate. See ADR 0007.
 
+## Metronome tracks
+
+A track with a `click` field (`session/click.ts`: bpm, beats, unit,
+subdivision) is a metronome track. Only the pattern is shared; `AudioSync`
+renders one bar of clicks locally and feeds it to the track chain like a
+mixed loop, so mix, effects, solo and the song view work unchanged. Its disc
+toggles mute instead of recording. See ADR 0008.
+
 ## Performance notes
 
 - Discs (`ui/discRenderer.ts`): the spectrogram ring is painted once per mix

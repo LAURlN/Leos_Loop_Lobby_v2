@@ -4,10 +4,12 @@
 <script lang="ts">
   import { CANONICAL_RATE, describeLength } from '@lll/shared';
   import { EFFECTS } from '../../effects/registry';
+  import { describeClick } from '../../session/click';
   import { decibel, percent } from '../../effects/types';
   import { visibleLayers, type TrackState } from '../../session/schema';
   import { lobby } from '../../state/lobby.svelte';
   import { trackColor } from '../palette';
+  import ClickEditor from './ClickEditor.svelte';
   import EffectEditor from './EffectEditor.svelte';
   import Slider from './Slider.svelte';
 
@@ -47,7 +49,9 @@
   </header>
 
   <p class="info muted">
-    {#if track.length48 !== null}
+    {#if track.click}
+      Metronome · {describeClick(track.click)}
+    {:else if track.length48 !== null}
       {describeLength(track.length48, lobby.snapshot.referenceLength48)} · {(track.length48 / CANONICAL_RATE).toFixed(2)} s
     {:else}
       Length is set by the first take
@@ -55,10 +59,19 @@
     {#if layers.length}· {layers.length} take{layers.length === 1 ? '' : 's'} by {authors.join(', ')}{/if}
   </p>
 
-  <div class="actions">
-    <button onclick={() => lobby.undo(track.id)} disabled={!lobby.canUndo(track.id)}>↶ Undo</button>
-    <button onclick={() => lobby.redo(track.id)} disabled={!lobby.canRedo(track.id)}>↷ Redo</button>
-    <button onclick={() => lobby.clearTrack(track.id)} disabled={!track.layers.length}>Clear</button>
+  {#if track.click}
+    <section class="stack">
+      <h3 class="label">Metronome</h3>
+      <ClickEditor value={track.click} onchange={(patch) => lobby.setTrackClick(track.id, patch)} />
+    </section>
+  {/if}
+
+  <div class="actions" class:click={track.click !== null}>
+    {#if !track.click}
+      <button onclick={() => lobby.undo(track.id)} disabled={!lobby.canUndo(track.id)}>↶ Undo</button>
+      <button onclick={() => lobby.redo(track.id)} disabled={!lobby.canRedo(track.id)}>↷ Redo</button>
+      <button onclick={() => lobby.clearTrack(track.id)} disabled={!track.layers.length}>Clear</button>
+    {/if}
     {#if confirmDelete}
       <button class="danger" onclick={() => lobby.deleteTrack(track.id)}>Sure?</button>
     {:else}
@@ -174,6 +187,9 @@
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 6px;
+  }
+  .actions.click {
+    grid-template-columns: 1fr;
   }
   .actions button {
     padding: 0 6px;

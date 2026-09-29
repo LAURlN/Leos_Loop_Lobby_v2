@@ -14,6 +14,7 @@
  */
 import * as Y from 'yjs';
 import type { LengthSpec } from '@lll/shared';
+import { readClick, type ClickPattern } from './click';
 
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_BEATS_PER_LOOP = 4;
@@ -64,6 +65,8 @@ export interface TrackState {
   mute: boolean;
   solo: boolean;
   createdBy: string;
+  /** Set for metronome tracks: the loop is this click pattern, not takes (session/click.ts). */
+  click: ClickPattern | null;
   effects: EffectState[];
   /** All layers of this track including hidden ones, oldest first. */
   layers: LayerState[];
@@ -193,6 +196,7 @@ export function readSnapshot(doc: Y.Doc): SessionSnapshot {
       mute: bool(t.get('mute')),
       solo: bool(t.get('solo')),
       createdBy: str(t.get('createdBy')),
+      click: readClick(t.get('click')),
       effects: readEffects(t.get('effects')),
       layers: (layersByTrack.get(id) ?? []).sort((a, b) => a.seq - b.seq || a.author.localeCompare(b.author)),
     });
@@ -208,4 +212,5 @@ export function readSnapshot(doc: Y.Doc): SessionSnapshot {
 }
 
 export const visibleLayers = (t: TrackState) => t.layers.filter((l) => !l.hidden);
-export const hasAudio = (t: TrackState) => t.layers.some((l) => !l.hidden);
+/** Whether the track makes sound: visible takes, or a metronome pattern. */
+export const hasAudio = (t: TrackState) => t.click !== null || t.layers.some((l) => !l.hidden);

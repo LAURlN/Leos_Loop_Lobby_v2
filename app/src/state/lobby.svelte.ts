@@ -14,6 +14,7 @@ import { RoomSession, type Presence } from '../net/roomSession';
 import type { TransportStatus } from '../net/transport';
 import * as actions from '../session/actions';
 import { AudioSync, type TrackVisual } from '../session/audioSync';
+import { bpmForLength, DEFAULT_CLICK, MAX_BEATS, type ClickPattern } from '../session/click';
 import { LayerAudioStore } from '../session/layerAudio';
 import { Looper, type LocalRecording } from '../session/looper';
 import {
@@ -212,6 +213,12 @@ export class Lobby {
   tapTrack(trackId: string, eventTime?: number): void {
     if (this.songView) return;
     this.selectedTrackId = trackId;
+    // Nothing to record on a metronome track: its disc toggles the click instead.
+    const track = this.snapshot.tracks.find((t) => t.id === trackId);
+    if (track?.click) {
+      this.setTrackMix(trackId, { mute: !track.mute });
+      return;
+    }
     if (this.micError) {
       this.notify(`Can't record: ${this.micError}`);
       return;
@@ -431,6 +438,27 @@ export class Lobby {
     if (!sectionId) return;
     const id = actions.createTrack(this.doc, { lengthSpec, createdBy: this.userId, name, sectionId });
     this.selectedTrackId = id;
+  }
+
+  /** Adds a metronome track to the current section. */
+  addClickTrack(click: ClickPattern): void {
+    const sectionId = this.activeSectionId ?? this.snapshot.sections[0]?.id;
+    if (!sectionId) return;
+    const lengthSpec: LengthSpec = { kind: 'free', autoSnap: false }; // replaced by the click's bar length
+    this.selectedTrackId = actions.createTrack(this.doc, { lengthSpec, click, createdBy: this.userId, sectionId });
+  }
+
+  setTrackClick(trackId: string, patch: Partial<ClickPattern>): void {
+    actions.setTrackClick(this.doc, trackId, patch);
+  }
+
+  /** A metronome that fits the current section: its first loop as one bar, else 120 BPM in 4/4. */
+  get suggestedClick(): ClickPattern {
+    const section = this.snapshot.sections.find((s) => s.id === this.activeSectionId) ?? this.snapshot.sections[0];
+    const ref = section?.referenceLength48 ?? null;
+    if (ref === null) return { ...DEFAULT_CLICK };
+    const beats = Math.min(MAX_BEATS, section?.beatsPerLoop ?? DEFAULT_CLICK.beats);
+    return { ...DEFAULT_CLICK, beats, bpm: bpmForLength(ref, beats) };
   }
 
   deleteTrack(trackId: string): void {

@@ -7,6 +7,7 @@
   import { onMount } from 'svelte';
   import { CANONICAL_RATE, describeLength } from '@lll/shared';
   import { getEffect } from '../../effects/registry';
+  import { describeClick } from '../../session/click';
   import { hasAudio, visibleLayers, type TrackState } from '../../session/schema';
   import { lobby } from '../../state/lobby.svelte';
   import { DiscRenderer, type DiscMode, type DiscSticker } from '../discRenderer';
@@ -54,6 +55,7 @@
       case 'empty':
         return lengthText ? `Empty · ${lengthText} · tap to record` : 'Tap to record';
       case 'playing': {
+        if (track.click) return `${describeClick(track.click)} · tap to ${track.mute ? 'unmute' : 'mute'}`;
         const takes = `${layers.length} take${layers.length === 1 ? '' : 's'}`;
         const missing = visual?.missingLayers ? ` · ${visual.missingLayers} loading` : '';
         return `${lengthText} · ${takes}${missing}`;
@@ -116,7 +118,7 @@
 >
   <header>
     <span class="dot"></span>
-    <h3 title={track.name}>{track.name}</h3>
+    <h3 title={track.name}>{#if track.click}<span class="kind" aria-hidden="true">♩</span>{/if}{track.name}</h3>
     <button class="icon ghost edit" aria-label="Edit {track.name}" onclick={onedit}>⋯</button>
   </header>
   <button
@@ -167,6 +169,9 @@
     border-radius: 50%;
     background: var(--track);
     flex: none;
+  }
+  .kind {
+    margin-right: 5px;
   }
   h3 {
     font-size: 14px;

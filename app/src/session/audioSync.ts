@@ -14,6 +14,7 @@ import type { AudioEngine } from '../audio/engine';
 import type { MetronomeSegment } from '../audio/messages';
 import { computeSpectrogram, type Spectrogram } from '../ui/spectrogram';
 import { computePeaks } from '../ui/waveform';
+import { clickLength48, renderClick } from './click';
 import type { LayerAudioStore } from './layerAudio';
 import { LoopMixer, type MixLayer } from './loopMix';
 import { visibleLayers, type SectionState, type SessionSnapshot, type TrackState } from './schema';
@@ -324,6 +325,10 @@ export class AudioSync {
   }
 
   private syncMix(track: TrackState): void {
+    if (track.click) {
+      this.syncClick(track);
+      return;
+    }
     const layers = visibleLayers(track);
     const available = layers.filter((l) => this.store.has(l.id));
     const key = `${track.length48}|${available.map((l) => `${l.id}:${l.offset}:${l.gain}`).join(',')}`;
@@ -349,6 +354,21 @@ export class AudioSync {
     const peaks = computePeaks(mix);
     chain.setBuffer(mix); // transfers `mix`
     this.onVisual(track.id, { spectrogram, peaks, missingLayers: missing, revision: ++this.revision });
+  }
+
+  /** Metronome tracks: the loop is rendered locally from the shared pattern. */
+  private syncClick(track: TrackState): void {
+    const click = track.click!;
+    const length = track.length48 ?? clickLength48(click);
+    const key = `click|${length}|${click.bpm}|${click.beats}|${click.unit}|${click.subdivision}`;
+    if (this.mixKeys.get(track.id) === key) return;
+    this.mixKeys.set(track.id, key);
+    this.mixer.forget(track.id);
+    const loop = renderClick(click, length);
+    const spectrogram = computeSpectrogram(loop);
+    const peaks = computePeaks(loop);
+    this.engine.track(track.id).setBuffer(loop); // transfers `loop`
+    this.onVisual(track.id, { spectrogram, peaks, missingLayers: 0, revision: ++this.revision });
   }
 
   private scheduleReapply(): void {

@@ -4,8 +4,9 @@
  * call concurrently on many devices (the CRDT merges the results).
  */
 import * as Y from 'yjs';
-import { clampLength, predefinedLength, randomId, type LengthSpec } from '@lll/shared';
+import { CANONICAL_RATE, clampLength, predefinedLength, randomId, type LengthSpec } from '@lll/shared';
 import { clampParam, defaultParams, getEffect, normalizeParams } from '../effects/registry';
+import { clickLength48, normalizeClick, readClick, type ClickPattern } from './click';
 import type { LayerAudioStore } from './layerAudio';
 import {
   DEFAULT_BEATS_PER_LOOP,
@@ -154,6 +155,8 @@ export interface CreateTrackOptions {
   createdBy: string;
   name?: string;
   sectionId?: string;
+  /** Makes a metronome track: its length is one bar of this pattern (lengthSpec is ignored). */
+  click?: ClickPattern;
 }
 
 export function createTrack(doc: Y.Doc, options: CreateTrackOptions): string {
@@ -180,14 +183,25 @@ export function createTrack(doc: Y.Doc, options: CreateTrackOptions): string {
     }
     const order = maxOrder + 1;
     const ref = section?.get('referenceLength48') ?? meta.get('referenceLength48');
-    const length = predefinedLength(options.lengthSpec, typeof ref === 'number' ? ref : null);
+    const click = options.click ? normalizeClick(options.click) : null;
+    const length = click ? clickLength48(click) : predefinedLength(options.lengthSpec, typeof ref === 'number' ? ref : null);
     const track: YTrack = new Y.Map();
     track.set('sectionId', sectionId);
-    track.set('name', options.name?.trim() || `Track ${maxOrder + 2}`);
+    track.set('name', options.name?.trim() || (click ? 'Metronome' : `Track ${maxOrder + 2}`));
     track.set('color', order);
     track.set('order', order);
-    track.set('lengthSpec', options.lengthSpec);
+    // Old clients without metronome tracks see a fixed-length (empty) track.
+    track.set('lengthSpec', click ? secondsSpec(length!) : options.lengthSpec);
     track.set('length48', length);
+    if (click) {
+      track.set('click', click);
+      // As the first loop of the section it sets the grid: takes snap to its bars.
+      if (section && typeof section.get('referenceLength48') !== 'number') {
+        section.set('referenceLength48', length);
+        section.set('beatsPerLoop', click.beats);
+      }
+      if (typeof meta.get('referenceLength48') !== 'number') meta.set('referenceLength48', length);
+    }
     track.set('volume', 1);
     track.set('pan', 0);
     track.set('mute', false);
@@ -197,6 +211,39 @@ export function createTrack(doc: Y.Doc, options: CreateTrackOptions): string {
     tracks.set(id, track);
   }, LOCAL);
   return id;
+}
+
+const secondsSpec = (length48: number): LengthSpec => ({ kind: 'seconds', seconds: length48 / CANONICAL_RATE });
+
+/**
+ * Changes a metronome track's tempo or rhythm. If nothing else in its section
+ * sounds yet, the section's grid follows (takes snap to the new bars);
+ * otherwise recorded loops keep their length.
+ */
+export function setTrackClick(doc: Y.Doc, trackId: string, patch: Partial<ClickPattern>): void {
+  const { meta, tracks, layers, sections } = roots(doc);
+  const track = tracks.get(trackId);
+  const current = readClick(track?.get('click'));
+  if (!track || !current) return;
+  const click = normalizeClick({ ...current, ...patch });
+  const length = clickLength48(click);
+  const sectionId = track.get('sectionId') as string | undefined;
+  // Tracks that already sound against the current grid (takes or another metronome).
+  const withTakes = new Set([...layers.values()].filter((l) => l.get('hidden') !== true).map((l) => l.get('trackId')));
+  const others = [...tracks.entries()].filter(
+    ([id, t]) => id !== trackId && (withTakes.has(id) || readClick(t.get('click')) !== null),
+  );
+  doc.transact(() => {
+    track.set('click', click);
+    track.set('lengthSpec', secondsSpec(length));
+    track.set('length48', length);
+    const section = sectionId ? sections.get(sectionId) : undefined;
+    if (section && !others.some(([, t]) => t.get('sectionId') === sectionId)) {
+      section.set('referenceLength48', length);
+      section.set('beatsPerLoop', click.beats);
+    }
+    if (others.length === 0) meta.set('referenceLength48', length);
+  }, LOCAL);
 }
 
 export function deleteTrack(doc: Y.Doc, trackId: string): void {
@@ -392,6 +439,8 @@ export function copyTrackToSection(
     newTrack.set('mute', Boolean(srcTrack.get('mute')));
     newTrack.set('solo', Boolean(srcTrack.get('solo')));
     newTrack.set('createdBy', createdBy);
+    const click = readClick(srcTrack.get('click'));
+    if (click) newTrack.set('click', click);
 
     if (typeof length48 === 'number' && typeof targetSection.get('referenceLength48') !== 'number') {
       targetSection.set('referenceLength48', length48);
@@ -486,6 +535,7 @@ export function clearSession(doc: Y.Doc, createdBy: string): void {
 const SECTION_FIELDS = new Set(['name', 'order', 'referenceLength48', 'beatsPerLoop', 'createdBy']);
 const TRACK_FIELDS = new Set([
   'sectionId', 'name', 'color', 'order', 'lengthSpec', 'length48', 'volume', 'pan', 'mute', 'solo', 'createdBy', 'effects',
+  'click',
 ]);
 const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden', 'length48']);
 const EFFECT_FIELDS = new Set(['type', 'enabled', 'order', 'params']);
@@ -603,6 +653,11 @@ export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'repla
       y.set('solo', t.solo === true);
       y.set('createdBy', typeof t.createdBy === 'string' ? t.createdBy : '');
       y.set('effects', importEffects(t.effects));
+      const click = readClick(t.click);
+      if (click) {
+        y.set('click', click);
+        y.set('length48', clickLength48(click));
+      }
       tracks.set(id, y);
     }
 
