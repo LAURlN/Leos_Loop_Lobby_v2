@@ -52,6 +52,14 @@ Browser testing without a mic: open `/?testmic`. Two tabs = two players.
 2. Append it to `EFFECTS` in `app/src/effects/registry.ts`.
 That's all: editor UI, disc sticker, validation and sync derive from it.
 
+### Change the loop studio
+The working buffer and every edit live in `session/studio.ts` (pure: buffer in,
+new buffer out, unit-tested) — add an operation there, then a button in
+`ui/components/StudioDialog.svelte`. Saving goes through
+`Lobby.saveStudioEdit` → `actions.replaceTrackAudio`, which flattens the loop
+into one new layer and hides the takes it replaced (`layer.replaced`); never
+rewrite a layer's audio. See ADR 0011.
+
 ### Add a shared setting
 Add the field to `schema.ts` (read with a default in `readSnapshot`), write it
 only via a new function in `actions.ts`, expose an intent on `Lobby`, then use

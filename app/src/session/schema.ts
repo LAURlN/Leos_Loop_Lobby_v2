@@ -49,6 +49,12 @@ export interface LayerState {
   frames: number;
   gain: number;
   hidden: boolean;
+  /**
+   * Set on a take that was flattened by the loop studio: the takes it hides.
+   * Undoing the flattened take shows them again (actions.undoLayer), so
+   * "Save to loop" stays undoable.
+   */
+  replaced: string[];
 }
 
 export interface TrackState {
@@ -127,6 +133,7 @@ function readEffects(v: unknown): EffectState[] {
 }
 
 export function readLayer(id: string, l: YLayer): LayerState {
+  const replaced = l.get('replaced');
   return {
     id,
     trackId: str(l.get('trackId')),
@@ -137,6 +144,7 @@ export function readLayer(id: string, l: YLayer): LayerState {
     frames: num(l.get('frames'), 0),
     gain: num(l.get('gain'), 1),
     hidden: bool(l.get('hidden')),
+    replaced: Array.isArray(replaced) ? replaced.filter((v): v is string => typeof v === 'string') : [],
   };
 }
 

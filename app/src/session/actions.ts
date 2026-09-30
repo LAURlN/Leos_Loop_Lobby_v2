@@ -4,7 +4,15 @@
  * call concurrently on many devices (the CRDT merges the results).
  */
 import * as Y from 'yjs';
-import { CANONICAL_RATE, clampLength, predefinedLength, randomId, type LengthSpec } from '@lll/shared';
+import {
+  CANONICAL_RATE,
+  MAX_LOOP_FRAMES,
+  MIN_LOOP_FRAMES,
+  clampLength,
+  predefinedLength,
+  randomId,
+  type LengthSpec,
+} from '@lll/shared';
 import { clampParam, defaultParams, getEffect, normalizeParams } from '../effects/registry';
 import { clickLength48, normalizeClick, readClick, type ClickPattern } from './click';
 import type { LayerAudioStore } from './layerAudio';
@@ -391,6 +399,27 @@ function ownLayers(doc: Y.Doc, trackId: string, author: string) {
     .sort((a, b) => a.s.seq - b.s.seq);
 }
 
+/** Shows or hides the takes a flattened take replaced (see replaceTrackAudio). */
+function setLayerHidden(doc: Y.Doc, ids: string[], hidden: boolean): void {
+  const { layers } = roots(doc);
+  for (const id of ids) layers.get(id)?.set('hidden', hidden);
+}
+
+/**
+ * Takes that a visible flattened take replaced. Their author must not bring
+ * them back with redo: the flattened audio would sound twice.
+ */
+function replacedByVisible(doc: Y.Doc, trackId: string): Set<string> {
+  const { layers } = roots(doc);
+  const out = new Set<string>();
+  for (const [id, l] of layers.entries()) {
+    const layer = readLayer(id, l);
+    if (layer.trackId !== trackId || layer.hidden) continue;
+    for (const replaced of layer.replaced) out.add(replaced);
+  }
+  return out;
+}
+
 /** Hides the author's newest visible take on a track. Returns its id, or null. */
 export function undoLayer(doc: Y.Doc, trackId: string, author: string): string | null {
   const visible = ownLayers(doc, trackId, author).filter(({ s }) => !s.hidden);
@@ -398,6 +427,8 @@ export function undoLayer(doc: Y.Doc, trackId: string, author: string): string |
   if (!last) return null;
   doc.transact(() => {
     last.y.set('hidden', true);
+    // A flattened take (loop studio) brings back the takes it replaced.
+    if (last.s.replaced.length > 0) setLayerHidden(doc, last.s.replaced, false);
     releaseLengthIfEmpty(doc, trackId);
   }, LOCAL);
   return last.s.id;
@@ -407,7 +438,8 @@ export function undoLayer(doc: Y.Doc, trackId: string, author: string): string |
 export function redoLayer(doc: Y.Doc, trackId: string, author: string): string | null {
   const own = ownLayers(doc, trackId, author);
   const newestVisibleSeq = Math.max(0, ...own.filter(({ s }) => !s.hidden).map(({ s }) => s.seq));
-  const candidates = own.filter(({ s }) => s.hidden && s.seq > newestVisibleSeq);
+  const flattened = replacedByVisible(doc, trackId);
+  const candidates = own.filter(({ s }) => s.hidden && s.seq > newestVisibleSeq && !flattened.has(s.id));
   const first = candidates[0];
   if (!first) return null;
   doc.transact(() => {
@@ -416,14 +448,72 @@ export function redoLayer(doc: Y.Doc, trackId: string, author: string): string |
     // Takes from before the length was stored on the layer: their audio is at most one loop long.
     if (track) claimLength(doc, track, clampLength(typeof stored === 'number' ? stored : first.s.frames));
     first.y.set('hidden', false);
+    // Redoing a flattened take hides the takes it replaced again.
+    if (first.s.replaced.length > 0) setLayerHidden(doc, first.s.replaced, true);
   }, LOCAL);
   return first.s.id;
+}
+
+export interface FlattenTrackAudio {
+  /** Id for the new take. Its audio must already be in the LayerAudioStore. */
+  layerId: string;
+  trackId: string;
+  author: string;
+  authorName: string;
+  /** Canonical frames of the edited loop. The take starts at loop position 0. */
+  frames: number;
+  /** Visible takes of this track that the new take replaces. */
+  replaced: string[];
+}
+
+/**
+ * Replaces a track's audible takes with one flattened take: the loop studio's
+ * "Save to loop". The new take spans the whole loop, and the loop length follows
+ * it (edits may have removed or added time). Replaced takes are hidden, never
+ * deleted, so undoLayer brings them back and no audio is ever rewritten.
+ */
+export function replaceTrackAudio(doc: Y.Doc, edit: FlattenTrackAudio): boolean {
+  const frames = Math.round(edit.frames);
+  if (!Number.isSafeInteger(frames) || frames < MIN_LOOP_FRAMES || frames > MAX_LOOP_FRAMES) return false;
+  const { tracks, layers } = roots(doc);
+  const track = tracks.get(edit.trackId);
+  if (!track || readClick(track.get('click'))) return false;
+  if (layers.has(edit.layerId)) return false;
+  const replaced: string[] = [];
+  for (const id of edit.replaced) {
+    const layer = layers.get(id);
+    if (layer && layer.get('trackId') === edit.trackId && layer.get('hidden') !== true) replaced.push(id);
+  }
+  doc.transact(() => {
+    let seq = 0;
+    for (const l of layers.values()) {
+      if (l.get('author') === edit.author) seq = Math.max(seq, Number(l.get('seq') ?? 0));
+    }
+    if (replaced.length > 0) setLayerHidden(doc, replaced, true);
+    const y: YLayer = new Y.Map();
+    y.set('trackId', edit.trackId);
+    y.set('author', edit.author);
+    y.set('authorName', edit.authorName);
+    y.set('seq', seq + 1);
+    y.set('offset', 0);
+    y.set('frames', frames);
+    y.set('gain', 1);
+    y.set('hidden', false);
+    y.set('length48', frames);
+    if (replaced.length > 0) y.set('replaced', replaced);
+    layers.set(edit.layerId, y);
+    claimLength(doc, track, frames);
+    // The edited buffer *is* the loop now; a longer take would wrap onto itself.
+    if (track.get('length48') !== frames) track.set('length48', frames);
+  }, LOCAL);
+  return true;
 }
 
 export function canRedo(doc: Y.Doc, trackId: string, author: string): boolean {
   const own = ownLayers(doc, trackId, author);
   const newestVisibleSeq = Math.max(0, ...own.filter(({ s }) => !s.hidden).map(({ s }) => s.seq));
-  return own.some(({ s }) => s.hidden && s.seq > newestVisibleSeq);
+  const flattened = replacedByVisible(doc, trackId);
+  return own.some(({ s }) => s.hidden && s.seq > newestVisibleSeq && !flattened.has(s.id));
 }
 
 /** Removes every take on a track. Free tracks forget their length so the next take decides again. */
@@ -574,7 +664,7 @@ const TRACK_FIELDS = new Set([
   'sectionId', 'name', 'color', 'order', 'lengthSpec', 'length48', 'volume', 'pan', 'mute', 'solo', 'createdBy', 'effects',
   'click', 'songTake',
 ]);
-const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden', 'length48']);
+const LAYER_FIELDS = new Set(['trackId', 'author', 'authorName', 'seq', 'offset', 'frames', 'gain', 'hidden', 'length48', 'replaced']);
 const EFFECT_FIELDS = new Set(['type', 'enabled', 'order', 'params']);
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -715,6 +805,11 @@ export function importProject(doc: Y.Doc, project: ImportedProject, mode: 'repla
       y.set('hidden', l.hidden === true);
       const loop = lengthOrNull(l.length48);
       if (loop !== null) y.set('length48', loop);
+      // Flattened takes keep the takes they hide (ids were remapped on import).
+      const replaced = Array.isArray(l.replaced)
+        ? l.replaced.filter((v): v is string => typeof v === 'string').slice(0, 64)
+        : [];
+      if (replaced.length > 0) y.set('replaced', replaced);
       layers.set(id, y);
     }
 

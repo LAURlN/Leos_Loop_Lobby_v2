@@ -1,11 +1,17 @@
 <!--
   Dialog that is a bottom sheet on phones and a centered card on desktops.
+  `wide` gives room for canvas work (the loop studio).
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  let { title, onclose, children, footer }: { title: string; onclose: () => void; children: Snippet; footer?: Snippet } =
-    $props();
+  let {
+    title,
+    onclose,
+    children,
+    footer,
+    wide = false,
+  }: { title: string; onclose: () => void; children: Snippet; footer?: Snippet; wide?: boolean } = $props();
 
   function onkeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') onclose();
@@ -15,7 +21,7 @@
 <svelte:window {onkeydown} />
 
 <div class="backdrop" role="presentation" onclick={onclose}></div>
-<div class="modal" role="dialog" aria-modal="true" aria-label={title}>
+<div class="modal" class:wide role="dialog" aria-modal="true" aria-label={title}>
   <header>
     <h2>{title}</h2>
     <button class="icon ghost" aria-label="Close" onclick={onclose}>✕</button>
@@ -47,6 +53,10 @@
     border-radius: var(--radius);
     box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
   }
+  .modal.wide {
+    width: min(1080px, calc(100vw - 32px));
+    max-height: min(92vh, 900px);
+  }
   header {
     display: flex;
     align-items: center;
@@ -68,6 +78,9 @@
     justify-content: flex-end;
   }
   @media (max-width: 700px) {
+    .modal.wide {
+      width: 100%;
+    }
     .modal {
       left: 0;
       right: 0;

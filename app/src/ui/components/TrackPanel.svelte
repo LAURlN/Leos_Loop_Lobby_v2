@@ -13,7 +13,7 @@
   import EffectEditor from './EffectEditor.svelte';
   import Slider from './Slider.svelte';
 
-  let { track, onclose }: { track: TrackState; onclose?: () => void } = $props();
+  let { track, onclose, onstudio }: { track: TrackState; onclose?: () => void; onstudio?: () => void } = $props();
 
   const layers = $derived(visibleLayers(track));
   const authors = $derived([...new Set(layers.map((l) => (l.author === lobby.userId ? 'you' : l.authorName)))]);
@@ -39,6 +39,8 @@
   function rename(event: Event) {
     lobby.renameTrack(track.id, (event.target as HTMLInputElement).value);
   }
+
+  const studioReady = $derived(lobby.canOpenStudio(track.id));
 </script>
 
 <div class="panel" style:--track={trackColor(track.color)}>
@@ -58,6 +60,20 @@
     {/if}
     {#if layers.length}· {layers.length} take{layers.length === 1 ? '' : 's'} by {authors.join(', ')}{/if}
   </p>
+
+  {#if onstudio && !track.click}
+    <button
+      class="studio"
+      onclick={onstudio}
+      disabled={!studioReady}
+      title={studioReady
+        ? 'Edit this loop on a waveform: cut, fade, normalize…'
+        : 'Record a take first — the studio edits audio.'}
+    >
+      <span class="studio-icon" aria-hidden="true">✂</span>
+      Open in Studio
+    </button>
+  {/if}
 
   {#if track.click}
     <section class="stack">
@@ -221,6 +237,22 @@
   .small {
     font-size: 13px;
     margin: 0;
+  }
+  .studio {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-weight: 650;
+    border-color: var(--track);
+    color: var(--track);
+    background: rgb(255 255 255 / 0.03);
+  }
+  .studio:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
+  .studio-icon {
+    font-size: 16px;
   }
   .copy-box {
     display: flex;

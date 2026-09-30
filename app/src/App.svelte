@@ -10,6 +10,7 @@
   import SectionTabs from './ui/components/SectionTabs.svelte';
   import SettingsDialog from './ui/components/SettingsDialog.svelte';
   import SongView from './ui/components/SongView.svelte';
+  import StudioDialog from './ui/components/StudioDialog.svelte';
   import TrackCard from './ui/components/TrackCard.svelte';
   import TrackPanel from './ui/components/TrackPanel.svelte';
   import { lobby } from './state/lobby.svelte';
@@ -18,8 +19,14 @@
   let dialog = $state<Dialog>(null);
   let sheetOpen = $state(false);
   let wide = $state(true);
+  /** Track id whose loop is open in the studio, if any. */
+  let studioTrackId = $state<string | null>(null);
+  let studioResume = false;
 
   const selected = $derived(lobby.snapshot.tracks.find((t) => t.id === lobby.selectedTrackId) ?? null);
+  const studioTrack = $derived(
+    studioTrackId ? (lobby.snapshot.tracks.find((t) => t.id === studioTrackId) ?? null) : null,
+  );
   const invitedTo = new URLSearchParams(location.search).get('room');
   const otherSectionsWithTracks = $derived(
     lobby.snapshot.sections.filter(
@@ -47,6 +54,27 @@
     sheetOpen = true;
   }
 
+  /**
+   * The studio edits one loop in peace: the section transport pauses while it
+   * is open (otherwise the loop would sound twice) and resumes afterwards.
+   */
+  function openStudio(trackId: string) {
+    if (!lobby.canOpenStudio(trackId)) {
+      lobby.notify('Record a take on this loop first — the studio edits audio.');
+      return;
+    }
+    studioResume = !lobby.playbackPaused;
+    lobby.pausePlayback();
+    sheetOpen = false;
+    studioTrackId = trackId;
+  }
+
+  function closeStudio() {
+    studioTrackId = null;
+    if (studioResume) lobby.resumePlayback();
+    studioResume = false;
+  }
+
   function onWindowClick(event: MouseEvent) {
     const target = event.target as HTMLElement | null;
     if (!target) return;
@@ -69,7 +97,8 @@
 
   /** Desktop shortcuts: 1-9 tap a track, Space taps selected (or toggles playback if none), Z undoes. */
   function onkeydown(event: KeyboardEvent) {
-    if (!lobby.started || dialog || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    // The studio handles its own keys.
+    if (!lobby.started || dialog || studioTrackId || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement;
     if (target.closest('input, select, textarea, button')) return;
     if (lobby.songView) {
@@ -200,7 +229,7 @@
 
       {#if wide && selected}
         <aside class="side">
-          <TrackPanel track={selected} />
+          <TrackPanel track={selected} onstudio={() => selected && openStudio(selected.id)} />
         </aside>
       {/if}
     </main>
@@ -211,9 +240,15 @@
     <div class="sheet-backdrop" role="presentation" onclick={() => (sheetOpen = false)}></div>
     <aside class="sheet" aria-label="Track settings">
       <div class="grabber"></div>
-      <TrackPanel track={selected} onclose={() => (sheetOpen = false)} />
+      <TrackPanel
+        track={selected}
+        onclose={() => (sheetOpen = false)}
+        onstudio={() => selected && openStudio(selected.id)}
+      />
     </aside>
   {/if}
+
+  {#if studioTrack}<StudioDialog track={studioTrack} onclose={closeStudio} />{/if}
 
   {#if dialog === 'add'}<AddTrackDialog onclose={() => (dialog = null)} />{/if}
   {#if dialog === 'copy'}<CopyLoopsDialog onclose={() => (dialog = null)} />{/if}
