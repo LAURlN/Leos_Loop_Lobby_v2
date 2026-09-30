@@ -20,6 +20,9 @@ Status as of the first v2 milestone. Items carried over from v1's
 - Full song view: all sections in order on a timeline, played back to back
 - Metronome tracks: tempo, time signature and subdivision per track (ADR 0008)
 - Project export/import (`.lll` files, forward/backward compatible, ADR 0006)
+- Loop studio: waveform editing per loop — cut/copy/paste, delete/silence,
+  reverse, fades, gain, normalize, trim to selection/silence, double length,
+  undo/redo, zoomable waveform with looping preview (ADR 0011)
 - GitHub Pages deployment workflow
 
 ## Next
@@ -34,8 +37,9 @@ Status as of the first v2 milestone. Items carried over from v1's
 4. **PWA offline support** (service worker) so solo mode works without network.
 5. **Quantized start/stop** for ratio/seconds tracks (start at the next cycle).
 6. **Compressed layer codec** (Opus via WebCodecs, codec id 2 in `codec.ts`).
-7. **Loop editing**: trim/extend, shift, per-layer gain (v1: edit loops,
-   lengthen/shorten).
+7. **Per-take loop editing** (v1: edit loops): the studio flattens a loop into
+   one take (ADR 0011); shifting or gaining a single take, and trimming one
+   take's audio, still need layer-level edits.
 8. **Input effects** (monitor chain) (v1).
 9. **Song sections** / scenes (v1).
 10. **Plugin effects**: load EffectDefinitions from URLs (v1: modding).

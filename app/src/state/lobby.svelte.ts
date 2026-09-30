@@ -4,7 +4,15 @@
  * Svelte UI. Components never touch Yjs or the AudioEngine directly.
  */
 import * as Y from 'yjs';
-import { isValidRoomCode, normalizeRoomCode, randomRoomCode, renderPosition, type LengthSpec, type PeerInfo } from '@lll/shared';
+import {
+  isValidRoomCode,
+  normalizeRoomCode,
+  randomId,
+  randomRoomCode,
+  renderPosition,
+  type LengthSpec,
+  type PeerInfo,
+} from '@lll/shared';
 import { runAcousticCalibration } from '../audio/calibration';
 import { AudioEngine } from '../audio/engine';
 import { estimateRoundTripMs, loadProfile, routeKeyOf, saveProfile, type LatencyProfile } from '../audio/latency';
@@ -25,9 +33,10 @@ import {
   projectFileName,
   withFreshIds,
 } from '../session/projectFile';
-import { hasAudio, readSnapshot, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
+import { hasAudio, readSnapshot, visibleLayers, type SectionState, type SessionSnapshot, type TrackState } from '../session/schema';
 import { songPlan as planSong, type SongPlan } from '../session/song';
 import { SongRecorder } from '../session/songRecording';
+import { mixToLoop, type StudioLayer } from '../session/studio';
 import { displayName, loadSettings, saveSettings, tabUserId, type Settings } from './settings';
 
 export interface RoomState {
@@ -40,6 +49,21 @@ export interface RoomState {
 export interface Toast {
   id: number;
   message: string;
+}
+
+/** What the loop studio needs to open: the mixed loop plus how it was built. */
+export interface StudioSource {
+  /** One loop of the track's audible takes, canonical rate, mono. */
+  data: Float32Array;
+  length48: number;
+  /** Audible takes that were mixed in. */
+  takes: number;
+  /** Takes whose audio has not arrived yet. */
+  missing: number;
+  /** Display names of the players on this loop ("you" for the local one). */
+  authors: string[];
+  gain: number;
+  pan: number;
 }
 
 const EMPTY: SessionSnapshot = { sections: [], referenceLength48: null, beatsPerLoop: 4, tracks: [] };
@@ -520,6 +544,83 @@ export class Lobby {
     this.songRecorder?.cancel();
     actions.clearSession(this.doc, this.userId);
     this.activeSectionId = this.snapshot.sections[0]?.id ?? null;
+  }
+
+  // ---- loop studio (ui/components/StudioDialog.svelte, session/studio.ts) ----
+
+  /** Metronome tracks and empty tracks have nothing to edit; takes must be there. */
+  canOpenStudio(trackId: string): boolean {
+    const track = this.snapshot.tracks.find((t) => t.id === trackId);
+    return !!track && !track.click && track.length48 !== null && visibleLayers(track).length > 0;
+  }
+
+  /** The studio's working copy, or null when the track cannot be edited. */
+  studioSource(trackId: string): StudioSource | null {
+    const track = this.snapshot.tracks.find((t) => t.id === trackId);
+    if (!track || track.click || track.length48 === null) return null;
+    const layers = visibleLayers(track);
+    const parts: StudioLayer[] = [];
+    let missing = 0;
+    for (const layer of layers) {
+      const data = this.store.get(layer.id);
+      if (!data) {
+        missing++;
+        continue;
+      }
+      parts.push({ offset: layer.offset, gain: layer.gain, data });
+    }
+    if (parts.length === 0) return null;
+    return {
+      data: mixToLoop(track.length48, parts),
+      length48: track.length48,
+      takes: layers.length,
+      /** Takes whose audio has not arrived yet: saving would drop them. */
+      missing,
+      authors: [...new Set(layers.map((l) => (l.author === this.userId ? 'you' : l.authorName)))],
+      gain: track.volume,
+      pan: track.pan,
+    };
+  }
+
+  /** Plays the studio buffer (dry, master volume applies) while the user edits. */
+  startStudioPreview(source: Pick<StudioSource, 'gain' | 'pan'>, data: Float32Array, start48: number, loop: boolean): void {
+    this.engine?.startPreview(data, { loop, gain: source.gain, pan: source.pan, start48 });
+  }
+
+  stopStudioPreview(): void {
+    this.engine?.stopPreview();
+  }
+
+  studioPreviewPosition48(): number | null {
+    return this.engine?.previewPosition48() ?? null;
+  }
+
+  /**
+   * Commits the edited buffer as the track's only take: one new flattened layer
+   * that hides the takes it replaces (undo brings them back). Takes are never
+   * rewritten, so this is safe to sync to a room.
+   */
+  saveStudioEdit(trackId: string, data: Float32Array): boolean {
+    const track = this.snapshot.tracks.find((t) => t.id === trackId);
+    if (!track || track.click) return false;
+    const layerId = randomId();
+    this.store.put(layerId, data);
+    const ok = actions.replaceTrackAudio(this.doc, {
+      layerId,
+      trackId,
+      author: this.userId,
+      authorName: this.name,
+      frames: data.length,
+      replaced: visibleLayers(track).map((l) => l.id),
+    });
+    if (!ok) {
+      this.store.forget([layerId]);
+      this.notify('The edit could not be saved to the loop.');
+      return false;
+    }
+    this.refreshSnapshot();
+    this.notify('Loop updated.');
+    return true;
   }
 
   // ---- project files ----------------------------------------------------------------

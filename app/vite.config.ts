@@ -11,6 +11,10 @@ export default defineConfig({
   plugins: [svelte(), ...(process.env.HTTPS ? [basicSsl()] : [])],
   server: {
     port: 5173,
+    // Hosts the dev server answers to, besides localhost. `.e2b.app` covers the
+    // sandbox live-preview proxy (https://<port>-<id>.e2b.app); set
+    // ALLOWED_DEV_HOSTS="host1,host2" for anything else (e.g. a LAN name).
+    allowedHosts: (process.env.ALLOWED_DEV_HOSTS ?? '.e2b.app').split(',').filter(Boolean),
     // In development the relay (`npm run dev:relay`) is reached through Vite,
     // so http/https and phone-on-LAN setups all work with one URL.
     proxy: { '/room': { target: 'http://127.0.0.1:8787', ws: true } },

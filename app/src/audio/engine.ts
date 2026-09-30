@@ -8,6 +8,7 @@
  *
  * Knows nothing about sessions or the network; session/audioSync.ts drives it.
  */
+import { CANONICAL_RATE, mod } from '@lll/shared';
 import processorsUrl from './worklet/processors.ts?worker&url';
 import { MicCapture } from './micCapture';
 import { PROCESSOR, type MetronomeMessage, type MetronomeSegment, type RecorderChunk } from './messages';
@@ -33,6 +34,16 @@ export class AudioEngine {
   private micSource: AudioNode | null = null;
   private testNodes: AudioScheduledSourceNode[] = [];
   private origin: number | null = null;
+  private preview: {
+    source: AudioBufferSourceNode;
+    gain: GainNode;
+    panner: StereoPannerNode;
+    /** Local frame when the preview started, and the buffer position it started at. */
+    startLocal: number;
+    offset48: number;
+    length48: number;
+    loop: boolean;
+  } | null = null;
 
   private constructor(readonly ctx: AudioContext) {
     this.capture = new MicCapture(Math.round(ctx.sampleRate * 3));
@@ -218,6 +229,70 @@ export class AudioEngine {
 
   trackIds(): string[] {
     return [...this.chains.keys()];
+  }
+
+  // -------------------------------------------------------------------------
+  // Loop studio preview
+  // -------------------------------------------------------------------------
+
+  /**
+   * Plays a mono buffer (canonical rate) on top of the mix: the loop studio's
+   * preview. A plain source -> gain -> pan path into the loops bus, so the
+   * master volume applies while the track's own chain (effects, mix) does not —
+   * the studio edits the dry loop.
+   */
+  startPreview(
+    samples: Float32Array,
+    options: { loop: boolean; gain: number; pan: number; start48?: number },
+  ): void {
+    this.stopPreview();
+    if (samples.length === 0) return;
+    // The buffer keeps its canonical rate; the browser resamples on playback.
+    const buffer = this.ctx.createBuffer(1, samples.length, CANONICAL_RATE);
+    buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
+    const source = new AudioBufferSourceNode(this.ctx, { buffer, loop: options.loop });
+    const gain = new GainNode(this.ctx, { gain: Math.max(0, Math.min(2, options.gain)) });
+    const panner = new StereoPannerNode(this.ctx, { pan: Math.max(-1, Math.min(1, options.pan)) });
+    source.connect(gain).connect(panner).connect(this.loopsBus);
+    const offset48 = Math.max(0, Math.min(samples.length, Math.round(options.start48 ?? 0)));
+    this.preview = {
+      source,
+      gain,
+      panner,
+      startLocal: this.renderFrameNow(),
+      offset48,
+      length48: samples.length,
+      loop: options.loop,
+    };
+    source.start(0, offset48 / CANONICAL_RATE);
+    source.onended = () => {
+      if (this.preview?.source === source) this.stopPreview();
+    };
+  }
+
+  /** Position (canonical frames) of the preview, or null when nothing plays. */
+  previewPosition48(): number | null {
+    const preview = this.preview;
+    if (!preview) return null;
+    const elapsed48 = ((this.renderFrameNow() - preview.startLocal) * CANONICAL_RATE) / this.ctx.sampleRate;
+    const position = preview.offset48 + elapsed48;
+    if (!preview.loop) return position < preview.length48 ? position : null;
+    return mod(position, preview.length48);
+  }
+
+  stopPreview(): void {
+    const preview = this.preview;
+    this.preview = null;
+    if (!preview) return;
+    preview.source.onended = null;
+    try {
+      preview.source.stop();
+    } catch {
+      // Never started or already finished.
+    }
+    preview.source.disconnect();
+    preview.gain.disconnect();
+    preview.panner.disconnect();
   }
 
   /** Plays a mono buffer directly to the output at a given local frame (calibration). */

@@ -43,10 +43,10 @@
 |---|---|---|
 | `audio/` | AudioContext, worklets, mic capture, track chains, calibration | Knows nothing about sessions or the network. |
 | `effects/` | Declarative effect definitions + registry | One file per effect. UI and sync derive from it. |
-| `session/` | Yjs schema, actions, the looper state machine, audio sync, layer audio store & codec, project files | Only `actions.ts` writes the doc. |
+| `session/` | Yjs schema, actions, the looper state machine, audio sync, layer audio store & codec, project files, the loop studio's buffer model | Only `actions.ts` writes the doc. |
 | `net/` | Transport interface, relay transport, room session, blob exchange | Speaks only through `Transport`. |
 | `state/` | App controller (`Lobby`) with Svelte runes, device settings | The only bridge between UI and everything else. |
-| `ui/` | Components, canvas disc renderer, spectrogram, palette | No Yjs, no AudioEngine imports. |
+| `ui/` | Components, canvas disc renderer, spectrogram, studio view maths, palette | No Yjs, no AudioEngine imports. |
 
 ## Data flow of a take
 
@@ -107,6 +107,26 @@ layers. Their optional `songTake` flag disables extra play-window fades, so
 internal splits do not dip in volume. Stop/pause saves; arrangement timing
 changes or replacing the session cancel capture and any pending finalization.
 
+## Loop studio
+
+`⋯` → *Open in Studio* on a track opens `ui/components/StudioDialog.svelte`: a
+waveform editor for that one loop (ADR 0011). `Lobby.studioSource` mixes the
+audible takes into one working buffer (`session/studio.ts`); the pure
+operations there (cut, paste, delete, silence, fade, gain, normalize, reverse,
+trim, double, zero-crossing snap) each return a new buffer, so the dialog's
+undo history is just a list of arrays. While the studio is open the section
+transport pauses and `AudioEngine.startPreview` plays the working buffer dry
+(through the loops bus, so master volume applies) — the loop is never heard
+twice.
+
+**Save to loop** commits via `actions.replaceTrackAudio`: one new layer spans
+the whole loop and the takes it replaces are hidden through the layer's
+`replaced` field, which `undoLayer`/`redoLayer` flip back. Nothing rewrites
+audio; the new layer travels to peers like any take. If an edit changed the
+loop length (Delete, trim silence, Double), the track's `length48` follows it —
+`Silence` keeps the grid. `ui/studioView.ts` holds the drawing maths
+(min/max envelope per pixel column, ruler steps, zoom/pan, time formatting).
+
 ## Metronome tracks
 
 A track with a `click` field (`session/click.ts`: bpm, beats, unit,
@@ -123,6 +143,8 @@ toggles mute instead of recording. See ADR 0008.
   skips off-screen cards and reads the audio clock once per frame.
 - `session/loopMix.ts` adds a new take onto the previous mix instead of
   re-summing every take.
+- The studio caches the wave as a min/max envelope per pixel column and only
+  redraws when the buffer, view or playhead moves.
 - Avoid `backdrop-filter` over the track grid: it re-renders every frame the
   discs move.
 

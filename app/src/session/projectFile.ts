@@ -174,12 +174,17 @@ export function withFreshIds(data: ProjectData): ProjectData {
     tracks[trackIds.get(id)!] = { ...t, sectionId: sectionId ?? '', effects };
   }
   const layers: Record<string, JsonObject> = {};
+  const layerIds = new Map(Object.keys(data.layers).map((id) => [id, randomId()]));
   const audio = new Map<string, Uint8Array>();
   for (const [id, l] of Object.entries(data.layers)) {
     const trackId = typeof l.trackId === 'string' ? trackIds.get(l.trackId) : undefined;
     if (!trackId) continue;
-    const newId = randomId();
-    layers[newId] = { ...l, trackId };
+    const newId = layerIds.get(id)!;
+    // A flattened take (loop studio) points at the takes it hides: remap them too.
+    const replaced: string[] | undefined = Array.isArray(l.replaced)
+      ? l.replaced.filter((v): v is string => typeof v === 'string').map((v) => layerIds.get(v) ?? v)
+      : undefined;
+    layers[newId] = replaced === undefined ? { ...l, trackId } : { ...l, trackId, replaced };
     const bytes = data.audio.get(id);
     if (bytes) audio.set(newId, bytes);
   }

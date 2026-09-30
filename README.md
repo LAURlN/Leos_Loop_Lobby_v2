@@ -11,11 +11,17 @@ device keeps its own clock; loops still line up (see
 2. **Calibrate latency** once per device/headphones (⚙ → Calibrate).
 3. Tap a track's disc to record, tap again to close the loop. Tap again to
    overdub. `⋯` opens undo/redo, mix and effects.
-4. **Multiplayer** → *Create a room* and share the link/code. Others join and
+4. `⋯` → **Open in Studio** edits one loop on a waveform: cut/copy/paste,
+   delete or silence a selection, fades, gain, normalize, reverse, trim, double
+   the length, all with undo. **Save to loop** merges the takes into one —
+   undo brings them back. Esc or Cancel leaves the loop untouched.
+5. **Multiplayer** → *Create a room* and share the link/code. Others join and
    hear your loops; their takes appear for you when they stop recording.
 
 Desktop shortcuts: `1`–`9` tap a track, `Space` taps the selected track,
-`Z` undoes your last take on it.
+`Z` undoes your last take on it. In the studio: `Space` plays, `Delete` removes
+a selection, `Ctrl/Cmd`+`Z`/`X`/`C`/`V`/`A` work as usual, `Home` returns to
+the start.
 
 In **Song**, use **Record** (or `R`) to play and record from the playhead.
 Your take becomes a new loop in each section it crosses, preserving the
